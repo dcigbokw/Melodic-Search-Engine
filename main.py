@@ -1,10 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
-
-# Import your polished math engines!
 from chord_generator import compose_chorale_2nd_order
-from search_engine import encode_intervals
+from search_engine import encode_intervals, search_bach_corpus
 
 app = FastAPI(
     title="Bach Generative AI & Search API",
@@ -59,18 +57,16 @@ class SearchRequest(BaseModel):
 @app.post("/search")
 def search_corpus(req: SearchRequest):
     """
-    Returns the encoded intervals of a requested melody.
-    (Running the full music21 corpus search on a web endpoint 
-    takes ~30s, so we validate the data pipeline extraction here instead!)
+    Performs a high-speed fuzzy search across the indexed Bach corpus.
     """
-    if len(req.melody) < 2:
-        raise HTTPException(status_code=400, detail="Melody must contain at least 2 notes.")
+    if len(req.melody) < 4: # We need 4 notes to make a 3-interval trigram
+        raise HTTPException(status_code=400, detail="Melody must contain at least 4 notes for trigram indexing.")
         
-    intervals = encode_intervals(req.melody)
+    # Actually run the real search engine!
+    search_results = search_bach_corpus(req.melody, req.max_distance)
     
     return {
         "status": "success",
         "query_melody": req.melody,
-        "encoded_intervals": intervals,
-        "message": "Data pipeline validation successful. Ready for the sliding window engine!"
+        "search_data": search_results
     }

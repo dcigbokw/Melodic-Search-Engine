@@ -1,0 +1,19 @@
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data and Model Files
+*.pkl
+*.pt
+*.pth
+
+# Audio Output
+*.mid
+*.midi
+*.wav
+
+# Virtual Environments
+venv/
+env/
+.env

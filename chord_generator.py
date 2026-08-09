@@ -1,80 +1,23 @@
-from music21 import corpus, chord, stream
+import random
+import pickle
+import os
 from rules_engine import check_parallel_motion, check_crossing_and_spacing
 from rules_engine import check_leading_tone_resolution
-import random
 
-print("Training matrices from scratch (This takes ~20 seconds)...")
+MATRIX_FILE = "bach_matrices.pkl"
 
-# ---------------------------------------------------------
-# 1st ORDER TRAINING
-# ---------------------------------------------------------
-transition_counts = {}
-bach_bundles = corpus.getComposer('bach')[:300]
+# ==========================================
+# PRODUCTION LOADING PHASE
+# ==========================================
+if not os.path.exists(MATRIX_FILE):
+    raise FileNotFoundError(f"Missing {MATRIX_FILE}! Run train.py first to build the AI's brain.")
 
-for score_path in bach_bundles:
-    score = corpus.parse(score_path)
-    raw_chords = score.chordify().flatten().getElementsByClass(chord.Chord)
-    clean_chords = []
-    
-    for c in raw_chords:
-        midi_array = [int(p.ps) for p in c.pitches]
-        if len(midi_array) == 4:
-            midi_array.reverse()
-            clean_chords.append(tuple(midi_array))
-            
-    for i in range(len(clean_chords) - 1):
-        current_chord = clean_chords[i]
-        next_chord = clean_chords[i + 1]
-        
-        if current_chord not in transition_counts:
-            transition_counts[current_chord] = {}
-        if next_chord not in transition_counts[current_chord]:
-            transition_counts[current_chord][next_chord] = 0
-        transition_counts[current_chord][next_chord] += 1
+# Load the dense, pre-transposed matrices instantly
+with open(MATRIX_FILE, 'rb') as f:
+    saved_data = pickle.load(f)
+    transition_matrix = saved_data["first_order"]
+    transition_matrix_2nd_order = saved_data["second_order"]
 
-transition_matrix = {}
-for current_chord, next_chords_dict in transition_counts.items():
-    transition_matrix[current_chord] = {}
-    total_transitions = sum(next_chords_dict.values())
-    for next_chord, count in next_chords_dict.items():
-        transition_matrix[current_chord][next_chord] = count / total_transitions
-
-# ---------------------------------------------------------
-# 2nd ORDER TRAINING
-# ---------------------------------------------------------
-transition_counts_2nd_order = {}
-
-for score_path in bach_bundles:
-    score = corpus.parse(score_path)
-    raw_chords = score.chordify().flatten().getElementsByClass(chord.Chord)
-    clean_chords = []
-    
-    for c in raw_chords:
-        midi_array = [int(p.ps) for p in c.pitches]
-        if len(midi_array) == 4:
-            midi_array.reverse()
-            clean_chords.append(tuple(midi_array))
-            
-    for i in range(len(clean_chords) - 2):
-        chord_1 = clean_chords[i]
-        chord_2 = clean_chords[i + 1]
-        chord_3 = clean_chords[i + 2]
-        current_state = (chord_1, chord_2)
-        
-        if current_state not in transition_counts_2nd_order:
-            transition_counts_2nd_order[current_state] = {}
-        if chord_3 not in transition_counts_2nd_order[current_state]:
-            transition_counts_2nd_order[current_state][chord_3] = 0
-        transition_counts_2nd_order[current_state][chord_3] += 1
-
-transition_matrix_2nd_order = {}
-for current_state, next_chords_dict in transition_counts_2nd_order.items():
-    transition_matrix_2nd_order[current_state] = {}
-    total_transitions = sum(next_chords_dict.values())
-    for next_chord, count in next_chords_dict.items():
-        transition_matrix_2nd_order[current_state][next_chord] = count / total_transitions
-
-print("Training Complete! Ready to generate.")
 def is_valid_transition(chord_a, chord_b, tonic_pc=0):
     """
     Acts as the 'Evaluator'. Takes two full chords and ensures moving 
@@ -162,11 +105,15 @@ def compose_recursive(song, num_chords, top_k, tonic_pc=0, state=None):
 # ==========================================
 # THE MAIN WRAPPER FUNCTION
 # ==========================================
-def compose_chorale_2nd_order(start_chord, num_chords=16, top_k=8, tonic_pc=0):
+def compose_chorale_2nd_order(start_chord, num_chords=16, top_k=8, tonic_pc=None):
     """
     Main entry point for chord generation.
     Includes a Cold-Start Backtracking loop for Chord 2.
     """
+    # Auto-detect the home key by looking at the bass note of your starting chord!
+    if tonic_pc is None:
+        tonic_pc = start_chord[3] % 12
+
     if start_chord not in transition_matrix:
         print(f"Error: Start chord {start_chord} not found in 1st-Order matrix.")
         return [start_chord]
@@ -209,4 +156,13 @@ def compose_chorale_2nd_order(start_chord, num_chords=16, top_k=8, tonic_pc=0):
     print("\nCritical Failure: Exhausted all Chord 2 candidates without finishing.")
     return [start_chord]
 
-
+start_c_major = (72, 67, 60, 48)
+if __name__ == "__main__":
+    generated_song = compose_chorale_2nd_order(start_c_major, num_chords=16, top_k=8)
+    
+    print("\n--- GENERATED CHORALE ---")
+    if generated_song:
+        for i, chord in enumerate(generated_song):
+            print(f"Chord {i+1}: {chord}")
+    else:
+        print("Failed to generate a sequence.")

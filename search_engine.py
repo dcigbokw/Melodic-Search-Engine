@@ -1,6 +1,23 @@
 from music21 import corpus
+import pickle
+import os
+
+INDEX_FILE = "search_index.pkl"
+
+# Load the index into memory on boot
+if os.path.exists(INDEX_FILE):
+    with open(INDEX_FILE, 'rb') as f:
+        data = pickle.load(f)
+        PHRASE_DB = data["database"]
+        INVERTED_INDEX = data["inverted_index"]
+else:
+    PHRASE_DB = {}
+    INVERTED_INDEX = {}
+
+def get_trigrams(intervals):
+    return [tuple(intervals[i:i+3]) for i in range(len(intervals)-2)]
 # ==========================================
-# 1. THE ENCODER
+# THE ENCODER
 # ==========================================
 def encode_intervals(melody):
     """
@@ -13,7 +30,7 @@ def encode_intervals(melody):
     return intervals
 
 # ==========================================
-# 2. THE LEVENSHTEIN DISTANCE MATRIX
+# THE LEVENSHTEIN DISTANCE MATRIX
 # ==========================================
 def levenshtein_distance(seq1, seq2):
     """Calculates the Edit Distance between two interval arrays."""
@@ -37,7 +54,7 @@ def levenshtein_distance(seq1, seq2):
     return dp[rows-1][cols-1]
 
 # ==========================================
-# 3. THE FUZZY SEARCH
+# THE FUZZY SEARCH
 # ==========================================
 def fuzzy_search_melody(query_intervals, target_intervals, max_distance=1):
     """Slides a window to find matches within the max edit distance."""
@@ -57,69 +74,49 @@ def fuzzy_search_melody(query_intervals, target_intervals, max_distance=1):
     return matches
 
 # ==========================================
-# 4. THE CORPUS DATA PIPELINE
+# THE CORPUS DATA PIPELINE
 # ==========================================
-def search_bach_corpus(query_melody, max_distance=1, max_songs=50):
+def search_bach_corpus(query_melody, max_distance=1):
     """
-    Searches the Bach corpus, cleanly delimiting musical phrases by rests 
-    so the sliding window never crosses an empty measure.
+    A true production search engine: Filter-then-Verify.
     """
-    print(f"Encoding query and searching the first {max_songs} Bach chorales...")
-    
+    if not PHRASE_DB:
+        return {"error": "Search index not found. Run build_index.py first."}
+        
     query_intervals = encode_intervals(query_melody)
-    print(f"Query Intervals: {query_intervals}\n")
+    query_trigrams = get_trigrams(query_intervals)
     
-    bach_bundles = corpus.getComposer('bach')[:max_songs]
-    total_matches = 0
-    
-    for score_path in bach_bundles:
-        score = corpus.parse(score_path)
-        soprano_part = score.parts[0]
+    # 1. THE FILTER PHASE (O(1) lookups)
+    # We only look at phrases that share AT LEAST ONE trigram with the query
+    candidate_ids = set()
+    for trigram in query_trigrams:
+        if trigram in INVERTED_INDEX:
+            candidate_ids.update(INVERTED_INDEX[trigram])
+            
+    if not candidate_ids:
+        return {"matches_found": 0, "results": []}
         
-        # THE DATA CLEANING PIPELINE
-        phrases = []
-        current_phrase = []
+    # 2. THE VERIFICATION PHASE (Levenshtein DP)
+    # We only run the expensive math on the narrowed-down candidate list!
+    final_results = []
+    for phrase_id in candidate_ids:
+        target_intervals = PHRASE_DB[phrase_id]["intervals"]
         
-        # Extract both notes AND rests
-        for element in soprano_part.flatten().notesAndRests:
-            if element.isNote:
-                current_phrase.append(int(element.pitch.ps))
-            elif element.isRest:
-                # If we hit a rest, save the phrase (if it has notes) and reset
-                if len(current_phrase) > 0:
-                    phrases.append(current_phrase)
-                    current_phrase = []
-                    
-        # Catch the final phrase if the song doesn't end on a rest
-        if len(current_phrase) > 0:
-            phrases.append(current_phrase)
+        # Run your existing fuzzy search function!
+        matches = fuzzy_search_melody(query_intervals, target_intervals, max_distance)
+        
+        if matches:
+            final_results.append({
+                "title": PHRASE_DB[phrase_id]["title"],
+                "phrase_id": phrase_id,
+                "edit_distances": [dist for index, dist in matches]
+            })
             
-        # 2. THE SEARCH
-        # Now we iterate through cleanly separated phrases instead of one massive track
-        for phrase_index, phrase_pitches in enumerate(phrases):
-            
-            # We need at least 2 notes to make 1 interval!
-            if len(phrase_pitches) < 2:
-                continue
-                
-            target_intervals = encode_intervals(phrase_pitches)
-            matches = fuzzy_search_melody(query_intervals, target_intervals, max_distance)
-            
-            if matches:
-                total_matches += len(matches)
-                
-                # Robust title extraction
-                if score.metadata:
-                    title = score.metadata.title or score.metadata.movementName or str(score_path)
-                else:
-                    title = str(score_path)
-                    
-                print(f"Match found in: {title} (Phrase {phrase_index + 1})")
-                for index, dist in matches:
-                    print(f"  -> Starts at note index {index} within phrase (Edit Distance: {dist})")
-                
-    print(f"\nSearch complete! Found {total_matches} total matches.")
-
+    return {
+        "matches_found": len(final_results),
+        "candidates_filtered": len(candidate_ids),
+        "results": final_results
+    }
 # ==========================================
 # RUN THE ENGINE!
 # ==========================================
@@ -128,5 +125,5 @@ if __name__ == "__main__":
     # The intervals will be: [+2, +2, +1]
     my_query = [60, 62, 64, 65] 
     
-    # Let's search 100 chorales with a strict exact match (max_distance=0)
-    search_bach_corpus(my_query, max_distance=0, max_songs=50)
+    # Let's search 100 chorales with a strict exact match 
+    print(search_bach_corpus(my_query, max_distance=0,))
