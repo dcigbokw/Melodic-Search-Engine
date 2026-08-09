@@ -1,0 +1,5 @@
+music21
+pytest
+fastapi
+uvicorn
+pydantic
