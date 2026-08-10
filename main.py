@@ -5,13 +5,25 @@ from typing import List
 from chord_generator import compose_chorale_2nd_order, transition_matrix
 from search_engine import encode_intervals, search_bach_corpus
 import random, os, uuid
-from rhythm_ai import generate_rhythms, inject_passing_tones, export_to_midi_with_rhythm
+from rhythm_ai import (
+    generate_rhythms, 
+    inject_passing_tones, 
+    export_to_midi_with_rhythm,
+    train_rhythm_model,
+    transition_matrix_rhythm
+)
 
 app = FastAPI(
     title="Bach Generative AI & Search API",
     description="REST API for generating counterpoint and fuzzy-searching the Bach corpus.",
     version="1.0.0"
 )
+
+# If the matrix is empty on startup, train it in memory.
+if not transition_matrix_rhythm:
+    print("No rhythm matrix found in memory. Training model...")
+    # This populates the global dictionary you imported
+    transition_matrix_rhythm.update(train_rhythm_model())
 
 # ==========================================
 # 1. THE GENERATOR ENDPOINT

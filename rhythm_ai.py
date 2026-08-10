@@ -158,6 +158,7 @@ def export_to_midi_with_rhythm(song, rhythms, filename='bach_ai_final.mid'):
 
 
 if __name__ == '__main__':
+    train_rhythm_model()
     start_c_major = (72, 67, 60, 48)
     my_song = compose_chorale_2nd_order(start_c_major, num_chords=24, top_k=8)
     my_rhythms = generate_rhythms(num_chords=len(my_song))
