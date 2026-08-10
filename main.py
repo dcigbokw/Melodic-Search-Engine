@@ -1,9 +1,11 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List
 from chord_generator import compose_chorale_2nd_order, transition_matrix
 from search_engine import encode_intervals, search_bach_corpus
-import random
+import random, os, uuid
+from rhythm_ai import generate_rhythms, inject_passing_tones, export_to_midi_with_rhythm
 
 app = FastAPI(
     title="Bach Generative AI & Search API",
@@ -24,25 +26,42 @@ def read_root():
     return {"message": "Welcome to the Bach AI Engine API! Go to /docs to test the endpoints."}
 
 @app.post("/generate")
-async def generate_melody(req: GenerateRequest):
-    # 1. FAIL-FAST: Ensure the matrix is actually loaded
+def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
+    """
+    Synchronous endpoint (def, not async def) to prevent CPU-bound 
+    backtracking from blocking the FastAPI event loop.
+    """
     if not transition_matrix:
         raise HTTPException(status_code=500, detail="Matrix is empty or failed to load. Run train.py first.")
         
-    # 2. DYNAMIC START SELECTION: Guarantee a valid starting chord
-    # By picking from keys(), we know 100% this chord exists in the matrix.
     start_chord = random.choice(list(transition_matrix.keys()))
+    tonic_pc = start_chord[3] % 12  # Auto-detect the key for passing tones
     
-    # 3. THE RETRY LOOP: Now it only retries genuine downstream dead-ends
     for attempt in range(5):
-        song = compose_chorale_2nd_order(start_chord, num_chords=req.num_chords, top_k=8)
+        # Using req.top_k instead of hardcoding 8
+        song = compose_chorale_2nd_order(start_chord, num_chords=req.num_chords, top_k=req.top_k)
         
-        # If the engine successfully bypassed dead-ends and hit the target length
         if len(song) == req.num_chords:
-            # (Insert your MIDI generation and return logic here)
-            return {"status": "success", "chords": song}
+            # 1. Generate Rhythms
+            rhythms = generate_rhythms(num_chords=len(song))
             
-    # 4. EXHAUSTED RETRIES
+            # 2. Inject Passing Tones
+            polished_song, polished_rhythms = inject_passing_tones(song, rhythms, tonic_pc=tonic_pc)
+            
+            # 3. Export to a unique temporary MIDI file
+            temp_filename = f"generated_{uuid.uuid4().hex[:8]}.mid"
+            export_to_midi_with_rhythm(polished_song, polished_rhythms, filename=temp_filename)
+            
+            # 4. Schedule the file for deletion AFTER the user downloads it
+            background_tasks.add_task(os.remove, temp_filename)
+            
+            # 5. Return the playable MIDI file to the frontend
+            return FileResponse(
+                temp_filename, 
+                media_type="audio/midi", 
+                filename="bach_ai_chorale.mid"
+            )
+            
     raise HTTPException(
         status_code=500, 
         detail=f"Engine hit a harmonic dead end 5 times in a row starting from {start_chord}."

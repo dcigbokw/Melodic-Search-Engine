@@ -2,56 +2,31 @@ from music21 import corpus, chord, stream
 import random
 from chord_generator import compose_chorale_2nd_order
 
-# 1. Initialize the empty dictionary
-# Structure: {current_duration: {next_duration: count}}
-# Example: {1.0: {1.0: 50, 0.5: 20, 2.0: 5}}
-transition_counts_rhythm = {}
-
-# Get the list of Bach chorales (let's use 150 again)
-bach_bundles = corpus.getComposer('bach')[:150]
-print(f"Training Rhythm Matrix on {len(bach_bundles)} chorales...")
-
-for score_path in bach_bundles:
-    score = corpus.parse(score_path)
-    raw_chords = score.chordify().flatten().getElementsByClass(chord.Chord)
-    
-    # 2. Extract the durations
-    durations = []
-    for c in raw_chords:
-        # Get the quarterLength of 'c' and append it to the durations list
-        duration = float(c.quarterLength) 
-        durations.append(duration)
-
-        
-    for i in range(len(durations) - 1):
-        current_duration = durations[i]
-        next_duration = durations[i + 1]
-           
-        # If we haven't seen the current chord before, add it to the dictionary
-        if current_duration not in transition_counts_rhythm:
-            transition_counts_rhythm[current_duration] = {}
-               
-           # If we haven't seen this specific transition before, start the count at 0
-        if next_duration not in transition_counts_rhythm[current_duration]:
-            transition_counts_rhythm[current_duration][next_duration] = 0
-               
-        # Add 1 to the tally!
-        transition_counts_rhythm[current_duration][next_duration] += 1
-
 transition_matrix_rhythm = {}
 
-for current_duration, next_durations_dict in transition_counts_rhythm.items():
-    transition_matrix_rhythm[current_duration] = {}
-    
-    # 1. Calculate the total number of times Bach moved away from this duration
-    total_transitions = sum(next_durations_dict.values())
-    
-    for next_duration, count in next_durations_dict.items():
-        # 2. Calculate the decimal percentage
-        probability = count/total_transitions
-        
-        # 3. Store the probability in the new matrix
-        transition_matrix_rhythm[current_duration][next_duration] = probability
+def train_rhythm_model(num_chorales=150):
+    """Parses the Bach corpus and builds the rhythm transition matrix in memory."""
+    global transition_matrix_rhythm
+    transition_counts_rhythm = {}
+    bach_bundles = corpus.getComposer('bach')[:num_chorales]
+    print(f"Training Rhythm Matrix on {len(bach_bundles)} chorales...")
+
+    for score_path in bach_bundles:
+        score = corpus.parse(score_path)
+        raw_chords = score.chordify().flatten().getElementsByClass(chord.Chord)
+        durations = [float(c.quarterLength) for c in raw_chords]
+        for i in range(len(durations) - 1):
+            current, nxt = durations[i], durations[i + 1]
+            transition_counts_rhythm.setdefault(current, {})
+            transition_counts_rhythm[current][nxt] = transition_counts_rhythm[current].get(nxt, 0) + 1
+
+    matrix = {}
+    for current, next_counts in transition_counts_rhythm.items():
+        total = sum(next_counts.values())
+        matrix[current] = {d: c / total for d, c in next_counts.items()}
+
+    transition_matrix_rhythm = matrix
+    return matrix
 
 def generate_rhythms(num_chords, start_duration=1.0):
     rhythm_track = [start_duration]
