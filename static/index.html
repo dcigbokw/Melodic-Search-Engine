@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bach Generative AI Engine</title>
+    
+    <!-- Magic library that renders and plays MIDI files in the browser -->
+    <script src="https://cdn.jsdelivr.net/combine/npm/tone@14.7.58,npm/@magenta/music@1.23.1/es6/core.js,npm/focus-visible@5,npm/html-midi-player@1.5.0"></script>
+    
+    <style>
+        :root { --primary: #2563eb; --bg: #f8fafc; --text: #0f172a; --card: #ffffff; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); max-width: 800px; margin: 0 auto; padding: 40px 20px; line-height: 1.6; }
+        h1 { text-align: center; color: var(--primary); margin-bottom: 10px; }
+        p.subtitle { text-align: center; color: #64748b; margin-bottom: 40px; }
+        
+        .card { background: var(--card); padding: 24px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 30px; }
+        h2 { margin-top: 0; font-size: 1.25rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }
+        
+        label { font-weight: bold; display: block; margin-top: 15px; font-size: 0.9rem; }
+        input { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; }
+        
+        button { background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 15px; width: 100%; transition: background 0.2s; }
+        button:hover { background: #1d4ed8; }
+        button:disabled { background: #94a3b8; cursor: not-allowed; }
+        
+        .status { margin-top: 15px; font-size: 0.9rem; font-weight: bold; color: #047857; text-align: center; }
+        
+        #player-container { margin-top: 20px; display: none; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+        midi-visualizer { width: 100%; background: #f1f5f9; border-radius: 6px; margin-bottom: 10px; }
+        
+        pre { background: #1e293b; color: #e2e8f0; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
+    </style>
+</head>
+<body>
+
+    <h1>Bach AI Engine</h1>
+    <p class="subtitle">Generative Counterpoint & Trigram Search API</p>
+
+    <!-- GENERATOR SECTION -->
+    <div class="card">
+        <h2>1. Generate a Chorale</h2>
+        <p>Uses a trained Markov chain and recursive backtracking to generate a 4-part chorale.</p>
+        
+        <label>Number of Chords:</label>
+        <input type="number" id="numChords" value="16" min="4" max="64">
+        
+        <button id="generateBtn">Generate Audio & Sheet Music</button>
+        <div id="genStatus" class="status"></div>
+
+        <div id="player-container">
+            <midi-visualizer type="piano-roll" id="myVisualizer"></midi-visualizer>
+            <midi-player id="myPlayer" visualizer="#myVisualizer" sound-font></midi-player>
+        </div>
+    </div>
+
+    <!-- SEARCH SECTION -->
+    <div class="card">
+        <h2>2. Fuzzy Search the Corpus</h2>
+        <p>Uses an inverted trigram index to find melodic sequences instantly.</p>
+        
+        <label>Query Melody (MIDI Integers, comma-separated):</label>
+        <input type="text" id="melodyQuery" value="72, 67, 64, 60" placeholder="e.g., 72, 67, 64, 60">
+        
+        <button id="searchBtn">Search Corpus</button>
+        <div id="searchStatus" class="status"></div>
+        
+        <div id="searchResults" style="display: none;">
+            <label>JSON Response:</label>
+            <pre id="searchJson"></pre>
+        </div>
+    </div>
+
+    <script>
+        // --- GENERATOR LOGIC ---
+        document.getElementById('generateBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('generateBtn');
+            const status = document.getElementById('genStatus');
+            const container = document.getElementById('player-container');
+            const numChords = document.getElementById('numChords').value;
+            
+            btn.disabled = true;
+            status.innerText = "Generating and applying rhythms... (this takes a few seconds)";
+            container.style.display = "none";
+
+            try {
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ num_chords: parseInt(numChords), top_k: 5 })
+                });
+
+                if (!response.ok) throw new Error("Generation failed.");
+
+                const blob = await response.blob();
+                const midiUrl = URL.createObjectURL(blob);
+                
+                document.getElementById('myPlayer').src = midiUrl;
+                document.getElementById('myVisualizer').src = midiUrl;
+                
+                status.innerText = "Success! Press play below.";
+                container.style.display = "block";
+            } catch (error) {
+                status.innerText = "Error: " + error.message;
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        // --- SEARCH LOGIC ---
+        document.getElementById('searchBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('searchBtn');
+            const status = document.getElementById('searchStatus');
+            const resultsDiv = document.getElementById('searchResults');
+            const jsonView = document.getElementById('searchJson');
+            
+            const rawMelody = document.getElementById('melodyQuery').value;
+            // Convert "72, 67, 64" into [72, 67, 64]
+            const melodyArray = rawMelody.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n));
+
+            btn.disabled = true;
+            status.innerText = "Searching inverted index...";
+            resultsDiv.style.display = "none";
+
+            try {
+                const response = await fetch('/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ melody: melodyArray, max_distance: 1 })
+                });
+
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.detail || "Search failed");
+                }
+
+                jsonView.textContent = JSON.stringify(data, null, 2);
+                status.innerText = `Found matches in ${data.search_data?.matches_found || 0} locations.`;
+                resultsDiv.style.display = "block";
+            } catch (error) {
+                status.innerText = "Error: " + error.message;
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

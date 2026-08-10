@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List
 from chord_generator import compose_chorale_2nd_order, transition_matrix
@@ -19,6 +20,14 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Mount the static folder to serve assets
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Override the root endpoint to serve the UI instead of the JSON message
+@app.get("/")
+def serve_frontend():
+    return FileResponse("static/index.html")
+
 # If the matrix is empty on startup, train it in memory.
 if not transition_matrix_rhythm:
     print("No rhythm matrix found in memory. Training model...")
@@ -33,9 +42,6 @@ class GenerateRequest(BaseModel):
     top_k: int = 5
     tonic_pc: int = 0
 
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to the Bach AI Engine API! Go to /docs to test the endpoints."}
 
 @app.post("/generate")
 def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
