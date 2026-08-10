@@ -1,8 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
-from chord_generator import compose_chorale_2nd_order
+from chord_generator import compose_chorale_2nd_order, transition_matrix
 from search_engine import encode_intervals, search_bach_corpus
+import random
 
 app = FastAPI(
     title="Bach Generative AI & Search API",
@@ -23,30 +24,29 @@ def read_root():
     return {"message": "Welcome to the Bach AI Engine API! Go to /docs to test the endpoints."}
 
 @app.post("/generate")
-def generate_music(req: GenerateRequest):
-    """Generates a Bach-style chorale with a master retry loop."""
-    start_chord = (72, 67, 64, 60) # C Major starting block
-    
-    # MASTER RETRY LOOP: Try up to 5 times to get a complete song
-    for attempt in range(5):
-        song = compose_chorale_2nd_order(
-            start_chord, 
-            num_chords=req.num_chords, 
-            top_k=req.top_k, 
-            tonic_pc=req.tonic_pc
-        )
+async def generate_melody(req: GenerateRequest):
+    # 1. FAIL-FAST: Ensure the matrix is actually loaded
+    if not transition_matrix:
+        raise HTTPException(status_code=500, detail="Matrix is empty or failed to load. Run train.py first.")
         
-        # If the returned song is the correct length, we succeeded!
+    # 2. DYNAMIC START SELECTION: Guarantee a valid starting chord
+    # By picking from keys(), we know 100% this chord exists in the matrix.
+    start_chord = random.choice(list(transition_matrix.keys()))
+    
+    # 3. THE RETRY LOOP: Now it only retries genuine downstream dead-ends
+    for attempt in range(5):
+        song = compose_chorale_2nd_order(start_chord, num_chords=req.num_chords, top_k=8)
+        
+        # If the engine successfully bypassed dead-ends and hit the target length
         if len(song) == req.num_chords:
-            return {
-                "status": "success",
-                "attempt": attempt + 1,
-                "chords": song
-            }
+            # (Insert your MIDI generation and return logic here)
+            return {"status": "success", "chords": song}
             
-    # If it fails 5 times in a row, return a 500 server error
-    raise HTTPException(status_code=500, detail="AI failed to find a valid progression after 5 attempts.")
-
+    # 4. EXHAUSTED RETRIES
+    raise HTTPException(
+        status_code=500, 
+        detail=f"Engine hit a harmonic dead end 5 times in a row starting from {start_chord}."
+    )
 # ==========================================
 # 2. THE SEARCH ENDPOINT
 # ==========================================

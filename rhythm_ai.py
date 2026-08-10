@@ -100,12 +100,6 @@ def generate_rhythms(num_chords, start_duration=1.0):
             
     return rhythm_track
 
-start_c_major = (72, 67, 60, 48)
-my_song = compose_chorale_2nd_order(start_c_major, num_chords=24, top_k=8)
-my_rhythms = generate_rhythms(num_chords=len(my_song))
-print(f"Rhythms generated: {my_rhythms}")
-print(f"Total beats: {sum(my_rhythms)} (Should be exactly divisible by 4)")
-
 
 def inject_passing_tones(song, rhythms, tonic_pc=0):
     """
@@ -186,7 +180,13 @@ def export_to_midi_with_rhythm(song, rhythms, filename='bach_ai_final.mid'):
     score.write('midi', fp=filename)
     print(f"\nSuccessfully exported {filename}!")
 
-polished_song, polished_rhythms = inject_passing_tones(my_song, my_rhythms, tonic_pc=0)
 
-# 3. Export to MIDI
-export_to_midi_with_rhythm(polished_song, polished_rhythms, filename='bach_with_passing_tones2.mid')
+
+if __name__ == '__main__':
+    start_c_major = (72, 67, 60, 48)
+    my_song = compose_chorale_2nd_order(start_c_major, num_chords=24, top_k=8)
+    my_rhythms = generate_rhythms(num_chords=len(my_song))
+    print(f"Rhythms generated: {my_rhythms}")
+    print(f"Total beats: {sum(my_rhythms)} (Should be exactly divisible by 4)")
+    polished_song, polished_rhythms = inject_passing_tones(my_song, my_rhythms, tonic_pc=0)
+    export_to_midi_with_rhythm(polished_song, polished_rhythms, filename='bach_with_passing_tones2.mid')
