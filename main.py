@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from typing import List
 from chord_generator import compose_chorale_2nd_order, transition_matrix
 from search_engine import encode_intervals, search_bach_corpus
+from note_parser import parse_note
 import random, os, uuid
 from rhythm_ai import (
     generate_rhythms, 
@@ -88,7 +89,7 @@ def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
 # 2. THE SEARCH ENDPOINT
 # ==========================================
 class SearchRequest(BaseModel):
-    melody: List[int]
+    melody: List[str]
     max_distance: int = 1
 
 @app.post("/search")
@@ -96,14 +97,13 @@ def search_corpus(req: SearchRequest):
     """
     Performs a high-speed fuzzy search across the indexed Bach corpus.
     """
-    if len(req.melody) < 4: # We need 4 notes to make a 3-interval trigram
+    try:
+        parsed_melody = [parse_note(token) for token in req.melody]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if len(parsed_melody) < 4:
         raise HTTPException(status_code=400, detail="Melody must contain at least 4 notes for trigram indexing.")
-        
-    # Actually run the real search engine!
-    search_results = search_bach_corpus(req.melody, req.max_distance)
-    
-    return {
-        "status": "success",
-        "query_melody": req.melody,
-        "search_data": search_results
-    }
+
+    search_results = search_bach_corpus(parsed_melody, req.max_distance)
+    return {"status": "success", "query_melody": parsed_melody, "search_data": search_results}

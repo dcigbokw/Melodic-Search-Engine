@@ -60,7 +60,7 @@
         <p>Uses an inverted trigram index to find melodic sequences instantly.</p>
         
         <label>Query Melody (MIDI Integers, comma-separated):</label>
-        <input type="text" id="melodyQuery" value="72, 67, 64, 60" placeholder="e.g., 72, 67, 64, 60">
+        <input type="text" id="melodyQuery" value="C5, G4, E4, C4" placeholder="e.g., C5, G4, E4, C4 (or MIDI numbers)">
         
         <button id="searchBtn">Search Corpus</button>
         <div id="searchStatus" class="status"></div>
@@ -116,8 +116,7 @@
             
             const rawMelody = document.getElementById('melodyQuery').value;
             // Convert "72, 67, 64" into [72, 67, 64]
-            const melodyArray = rawMelody.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n));
-
+            const melodyArray = rawMelody.split(',').map(n => n.trim()).filter(n => n.length > 0);
             btn.disabled = true;
             status.innerText = "Searching inverted index...";
             resultsDiv.style.display = "none";

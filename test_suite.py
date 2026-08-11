@@ -3,6 +3,7 @@ from unittest.mock import patch
 from rules_engine import check_parallel_motion, check_leading_tone_resolution, check_crossing_and_spacing
 from chord_generator import compose_chorale_2nd_order
 from rhythm_ai import generate_rhythms, inject_passing_tones
+from note_parser import parse_note
 
 # ==========================================
 # 1. RULES ENGINE TESTS
@@ -36,7 +37,7 @@ def test_voice_spacing_rejected():
     assert check_crossing_and_spacing(84, 67, 64, 60) == False
 
 # ==========================================
-# 2. CHORD GENERATOR TESTS (Mocked)
+# 2. CHORD GENERATOR TESTS 
 # ==========================================
 START_CHORD = (72, 67, 60, 48)
 CHORD_2 = (74, 69, 62, 50)
@@ -119,3 +120,24 @@ def test_inject_passing_tones_trigger():
     # The first rhythm (2.0) should be split into two 1.0 rhythms
     assert new_rhythms[0] == 1.0
     assert new_rhythms[1] == 1.0
+
+
+# ==========================================
+# 4. NOTE_PARSER TESTS 
+# ==========================================
+
+def test_parse_raw_midi_int():
+    assert parse_note("60") == 60
+
+def test_parse_natural_note():
+    assert parse_note("C4") == 60
+
+def test_parse_sharp_note():
+    assert parse_note("F#4") == 66
+
+def test_parse_flat_note():
+    assert parse_note("Bb3") == 58
+
+def test_parse_invalid_note_raises():
+    with pytest.raises(ValueError):
+        parse_note("H4")  # not a real note letter
