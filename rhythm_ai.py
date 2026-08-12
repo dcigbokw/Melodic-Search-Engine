@@ -28,51 +28,42 @@ def train_rhythm_model(num_chorales=150):
     transition_matrix_rhythm = matrix
     return matrix
 
-def generate_rhythms(num_chords, start_duration=1.0):
+def generate_rhythms(
+    num_chords,
+    start_duration=1.0,
+    fast_threshold=0.5,       # durations at or below this count as "fast"
+    max_consecutive_fast=4,   # how many fast notes in a row before forcing a resolution
+    resolution_min=1.0,       # a resolution must be at least this long
+):
     rhythm_track = [start_duration]
-    
-    # Track where we are in the measure (0.0 to 4.0)
     current_measure_beats = start_duration
-    
-    # We subtract 1 because we already have the starting duration
+    consecutive_fast = 1 if start_duration <= fast_threshold else 0
+
     for _ in range(num_chords - 1):
         current_duration = rhythm_track[-1]
-        
-        # Grab predictions
-        if current_duration in transition_matrix_rhythm:
-            predictions = transition_matrix_rhythm[current_duration]
-        else:
-            predictions = {1.0: 1.0} 
-            
-        valid_options = []
-        valid_weights = []
-        
-        # 1. FILTERING: Check if the candidate fits in the measure
+        predictions = transition_matrix_rhythm.get(current_duration, {1.0: 1.0})
+
+        valid_options, valid_weights = [], []
         for cand_duration, prob in predictions.items():
-            
-            # If current beats + candidate duration is <= 4.0, it fits perfectly
-            if current_measure_beats + cand_duration <= 4.0:
-                valid_options.append(cand_duration)
-                valid_weights.append(prob)
-                
-        # SAFETY FALLBACK: If Bach's suggestions overflow the measure,
-        # we force a duration that perfectly fills the rest of the measure.
+            if current_measure_beats + cand_duration > 4.0:
+                continue
+            if consecutive_fast >= max_consecutive_fast and cand_duration < resolution_min:
+                continue
+            valid_options.append(cand_duration)
+            valid_weights.append(prob)
+
         if not valid_options:
             forced_duration = 4.0 - current_measure_beats
-            valid_options = [forced_duration]
-            valid_weights = [1.0]
-            
-        # Roll the weighted die
+            valid_options, valid_weights = [forced_duration], [1.0]
+
         chosen_duration = random.choices(valid_options, weights=valid_weights, k=1)[0]
         rhythm_track.append(chosen_duration)
-        
-        # Add the chosen duration to our measure tracker
         current_measure_beats += chosen_duration
-        
-        # If we perfectly hit 4.0, the measure is full! Reset for the next measure.
+        consecutive_fast = consecutive_fast + 1 if chosen_duration <= fast_threshold else 0
+
         if current_measure_beats == 4.0:
             current_measure_beats = 0.0
-            
+
     return rhythm_track
 
 

@@ -106,6 +106,17 @@ def test_generate_rhythms_measure_math():
     total_beats = sum(rhythms)
     assert total_beats % 4.0 == 0, f"Measure overflow! Total beats {total_beats} is not divisible by 4."
 
+@patch("rhythm_ai.transition_matrix_rhythm", {0.25: {0.25: 1.0}})  # a matrix that ALWAYS wants 0.25
+def test_rhythm_resolution_after_fast_run():
+    """Even a pathological model that only ever wants fast notes should
+    still be forced to resolve every few notes."""
+    rhythms = generate_rhythms(num_chords=10, start_duration=0.25, max_consecutive_fast=3, resolution_min=1.0)
+    longest_run = current_run = 0
+    for r in rhythms:
+        current_run = current_run + 1 if r <= 0.5 else 0
+        longest_run = max(longest_run, current_run)
+    assert longest_run <= 3
+
 def test_inject_passing_tones_trigger():
     """Tests if the engine correctly splits a note when the Soprano leaps by a 3rd."""
     # Soprano leaps down a major 3rd from E (76) to C (72)
