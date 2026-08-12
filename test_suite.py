@@ -191,6 +191,7 @@ def test_search_endpoint_too_short():
     assert response.status_code == 400
     assert "at least 4 notes" in response.json()["detail"]
 
+@patch("main.transition_matrix", {(72, 67, 60, 48): {}})
 @patch("main.compose_chorale_2nd_order")
 @patch("main.export_to_midi_with_rhythm")
 @patch("main.os.remove")
@@ -205,7 +206,6 @@ def test_generate_endpoint_success(mock_remove, mock_export, mock_compose):
         
         response = client.post("/generate", json={"num_chords": 16, "top_k": 5, "tonic_pc": 0})
         assert response.status_code == 200
-
 # ==========================================
 # 6. SEARCH ENGINE MATH TESTS 
 # ==========================================
