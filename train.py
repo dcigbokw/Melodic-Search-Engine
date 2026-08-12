@@ -9,7 +9,7 @@ def build_matrices():
     transition_counts_2nd_order = {}
     
     # We will process 150 chorales to balance training time and matrix density
-    bach_bundles = corpus.getComposer('bach')[:350]
+    bach_bundles = corpus.getComposer('bach')[:500]
     
     for idx, score_path in enumerate(bach_bundles):
         print(f"Processing {idx+1}/{len(bach_bundles)}: {score_path}")

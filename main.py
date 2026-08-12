@@ -53,12 +53,22 @@ def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
     if not transition_matrix:
         raise HTTPException(status_code=500, detail="Matrix is empty or failed to load. Run train.py first.")
         
-    start_chord = random.choice(list(transition_matrix.keys()))
-    tonic_pc = start_chord[3] % 12  # Auto-detect the key for passing tones
-    
+    tonic_pc = req.tonic_pc % 12
+    candidate_starts = [c for c in transition_matrix.keys() if c[3] % 12 == tonic_pc]
+
+    if not candidate_starts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No trained chords found with a bass note matching tonic_pc={tonic_pc}."
+        )
+
+    start_chord = random.choice(candidate_starts)
+
     for attempt in range(5):
         # Using req.top_k instead of hardcoding 8
-        song = compose_chorale_2nd_order(start_chord, num_chords=req.num_chords, top_k=req.top_k)
+        song = compose_chorale_2nd_order(
+            start_chord, num_chords=req.num_chords, top_k=req.top_k, tonic_pc=tonic_pc
+        )
         
         if len(song) == req.num_chords:
             # 1. Generate Rhythms

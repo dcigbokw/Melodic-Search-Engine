@@ -118,6 +118,7 @@ def generate_chords_backtracking(voice_index, current_chord):
         generate_chords_backtracking(voice_index + 1, current_chord) 
         current_chord.pop()                                  
 
-# Kick it off with Voice 0 and an empty backpack
-generate_chords_backtracking(0, [])
-print(f"Total valid chords found: {len(valid_chords)}")
+if __name__ == "__main__":
+    # Kick it off with Voice 0 and an empty backpack
+    generate_chords_backtracking(0, [])
+    print(f"Total valid chords found: {len(valid_chords)}")

@@ -19,8 +19,8 @@ def build_search_index():
     inverted_index = {} # Maps trigrams -> Set of phrase IDs
     phrase_id = 0
     
-    # We'll index the first 150 chorales to match our generator training size
-    for idx, score_path in enumerate(bach_bundles[:150]):
+    
+    for idx, score_path in enumerate(bach_bundles[:500]):
         print(f"Indexing {idx+1}/150: {score_path}")
         score = corpus.parse(score_path)
         soprano_part = score.parts[0]
