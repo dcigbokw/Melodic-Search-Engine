@@ -47,7 +47,7 @@ class GenerateRequest(BaseModel):
 @app.post("/generate")
 def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
     """
-    Synchronous endpoint (def, not async def) to prevent CPU-bound 
+    Synchronous endpoint to prevent CPU-bound 
     backtracking from blocking the FastAPI event loop.
     """
     if not transition_matrix:
