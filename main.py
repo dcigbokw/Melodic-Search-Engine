@@ -3,10 +3,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List
-from chord_generator import compose_chorale_2nd_order, transition_matrix
+import json
+import random
+import os
+import uuid
+from chord_generator import compose_chorale_2nd_order, transition_matrix, all_corpora
 from search_engine import encode_intervals, search_bach_corpus
 from note_parser import parse_note
-import random, os, uuid
 from rhythm_ai import (
     generate_rhythms, 
     inject_passing_tones, 
@@ -14,6 +17,7 @@ from rhythm_ai import (
     train_rhythm_model,
     transition_matrix_rhythm
 )
+from music21 import chord, tempo, stream, midi, pitch
 
 app = FastAPI(
     title="Bach Generative AI & Search API",
@@ -21,19 +25,16 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Mount the static folder to serve assets
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Override the root endpoint to serve the UI instead of the JSON message
 @app.get("/")
 def serve_frontend():
     return FileResponse("static/index.html")
 
-# If the matrix is empty on startup, train it in memory.
 if not transition_matrix_rhythm:
     print("No rhythm matrix found in memory. Training model...")
-    # This populates the global dictionary you imported
     transition_matrix_rhythm.update(train_rhythm_model())
+
 
 # ==========================================
 # 1. THE GENERATOR ENDPOINT
@@ -43,13 +44,8 @@ class GenerateRequest(BaseModel):
     top_k: int = 5
     tonic_pc: int = 0
 
-
 @app.post("/generate")
 def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
-    """
-    Synchronous endpoint to prevent CPU-bound 
-    backtracking from blocking the FastAPI event loop.
-    """
     if not transition_matrix:
         raise HTTPException(status_code=500, detail="Matrix is empty or failed to load. Run train.py first.")
         
@@ -65,26 +61,18 @@ def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
     start_chord = random.choice(candidate_starts)
 
     for attempt in range(5):
-        # Using req.top_k instead of hardcoding 8
         song = compose_chorale_2nd_order(
             start_chord, num_chords=req.num_chords, top_k=req.top_k, tonic_pc=tonic_pc
         )
         
         if len(song) == req.num_chords:
-            # 1. Generate Rhythms
             rhythms = generate_rhythms(num_chords=len(song))
-            
-            # 2. Inject Passing Tones
             polished_song, polished_rhythms = inject_passing_tones(song, rhythms, tonic_pc=tonic_pc)
             
-            # 3. Export to a unique temporary MIDI file
             temp_filename = f"generated_{uuid.uuid4().hex[:8]}.mid"
             export_to_midi_with_rhythm(polished_song, polished_rhythms, filename=temp_filename)
-            
-            # 4. Schedule the file for deletion AFTER the user downloads it
             background_tasks.add_task(os.remove, temp_filename)
             
-            # 5. Return the playable MIDI file to the frontend
             return FileResponse(
                 temp_filename, 
                 media_type="audio/midi", 
@@ -95,8 +83,166 @@ def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
         status_code=500, 
         detail=f"Engine hit a harmonic dead end 5 times in a row starting from {start_chord}."
     )
+
+
 # ==========================================
-# 2. THE SEARCH ENDPOINT
+# 2. SATB TRANSLATOR HELPERS (Co-Creative UI)
+# ==========================================
+def midi_tuple_to_satb(midi_tuple):
+    """Translates AI math (72, 67, 64, 48) -> ['C5', 'G4', 'E4', 'C3']"""
+    if midi_tuple[0] == -1:
+        return ["rest", "rest", "rest", "rest"]
+        
+    satb_strings = []
+    for midi_val in midi_tuple:
+        if midi_val == -1:
+            satb_strings.append("rest")
+        else:
+            p = pitch.Pitch()
+            p.midi = midi_val
+            satb_strings.append(p.nameWithOctave) 
+    return satb_strings
+
+def satb_to_midi_tuple(satb_list):
+    """Translates UI arrays ['C5', 'G4', 'E4', 'C3'] -> (72, 67, 64, 48)"""
+    midi_vals = []
+    for note_str in satb_list:
+        note_str = note_str.strip()
+        if note_str.lower() == "rest":
+            midi_vals.append(-1)
+        else:
+            try:
+                p = pitch.Pitch(note_str)
+                midi_vals.append(p.midi)
+            except Exception:
+                midi_vals.append(60) 
+    return tuple(midi_vals)
+
+
+# ==========================================
+# 3. THE CO-CREATIVE EXTEND ENDPOINT (SATB)
+# ==========================================
+class ExtendRequest(BaseModel):
+    current_chords: List[List[str]]   
+    num_to_add: int = 4
+    composer_weights: dict = {"bach": 100, "beethoven": 0, "chopin": 0, "mozart": 0, "tchaikovsky": 0, "handel":0}
+    tempo: str = "andante"
+    dynamics: str = "mf"
+
+def interpolate_matrices(matrices_dict, user_weights):
+    """Blends multiple 1st-order Markov matrices into one based on UI percentages."""
+    total_weight = sum(user_weights.values())
+    if total_weight <= 0:
+        return matrices_dict.get("bach", {}).get("first_order", {})
+        
+    normalized_weights = {k: v / total_weight for k, v in user_weights.items()}
+    blended_matrix = {}
+    
+    for composer, comp_weight in normalized_weights.items():
+        if comp_weight == 0:
+            continue
+            
+        matrix = matrices_dict.get(composer, {}).get("first_order", {})
+        for state, transitions in matrix.items():
+            if state not in blended_matrix:
+                blended_matrix[state] = {}
+            
+            for next_state, prob in transitions.items():
+                weighted_prob = prob * comp_weight
+                if next_state not in blended_matrix[state]:
+                    blended_matrix[state][next_state] = 0.0
+                blended_matrix[state][next_state] += weighted_prob
+                
+    return blended_matrix
+
+@app.post("/extend")
+def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
+    # 1. Build the unique combinatorial matrix based on slider percentages
+    dynamic_matrix = interpolate_matrices(all_corpora, req.composer_weights)
+    
+    if not dynamic_matrix:
+        raise HTTPException(status_code=500, detail="Matrix is empty.")
+        
+    if len(req.current_chords) < 1:
+        raise HTTPException(status_code=400, detail="Provide at least 1 SATB block.")
+
+    human_sequence = [satb_to_midi_tuple(block) for block in req.current_chords]
+    
+    valid_chords = [c for c in human_sequence if c[0] != -1]
+    if not valid_chords:
+        current_state = random.choice(list(dynamic_matrix.keys()))
+        if isinstance(current_state, tuple) and isinstance(current_state[0], tuple):
+            current_state = current_state[-1]
+    else:
+        current_state = valid_chords[-1] 
+    
+    ai_extension = []
+    
+    # 2. Generate using the blended stylistic matrix
+    for _ in range(req.num_to_add):
+        if current_state in dynamic_matrix:
+            next_options = dynamic_matrix[current_state]
+            choices = list(next_options.keys())
+            weights = list(next_options.values())
+            next_chord = random.choices(choices, weights=weights, k=1)[0]
+            
+            ai_extension.append(next_chord)
+            current_state = next_chord
+        else:
+            next_chord = random.choice(list(dynamic_matrix.keys()))
+            if isinstance(next_chord, tuple) and isinstance(next_chord[0], tuple):
+                next_chord = next_chord[-1]
+            ai_extension.append(next_chord)
+            current_state = next_chord
+            
+    full_song_tuples = human_sequence + ai_extension
+    full_song_strings = [midi_tuple_to_satb(c) for c in full_song_tuples]
+    
+    tempo_map = {"adagio": 60, "andante": 90, "allegro": 130}
+    velocity_map = {"piano": 40, "mf": 75, "forte": 110}
+    
+    target_bpm = tempo_map.get(req.tempo, 90)
+    target_velocity = velocity_map.get(req.dynamics, 75)
+    
+    s = stream.Score()
+    p = stream.Part()
+    p.append(tempo.MetronomeMark(number=target_bpm))
+    
+    for c_tuple in full_song_tuples:
+        if c_tuple[0] == -1:
+            r = chord.Rest()
+            r.quarterLength = 1.0
+            p.append(r)
+        else:
+            valid_pitches = [pitch.Pitch(midi=m) for m in c_tuple if m != -1]
+            c_obj = chord.Chord(valid_pitches)
+            c_obj.quarterLength = 1.0 
+            for n in c_obj.notes:
+                n.volume.velocity = target_velocity
+            p.append(c_obj)
+        
+    s.append(p)
+    
+    temp_filename = f"collab_{uuid.uuid4().hex[:8]}.mid"
+    mf = midi.translate.streamToMidiFile(s)
+    mf.open(temp_filename, 'wb')
+    mf.write()
+    mf.close()
+    
+    background_tasks.add_task(os.remove, temp_filename)
+    
+    headers = {"X-Generated-Chords": json.dumps(full_song_strings)}
+    
+    return FileResponse(
+        temp_filename, 
+        media_type="audio/midi", 
+        filename="collab.mid",
+        headers=headers
+    )
+
+
+# ==========================================
+# 4. THE SEARCH ENDPOINT
 # ==========================================
 class SearchRequest(BaseModel):
     melody: List[str]
@@ -104,9 +250,6 @@ class SearchRequest(BaseModel):
 
 @app.post("/search")
 def search_corpus(req: SearchRequest):
-    """
-    Performs a high-speed fuzzy search across the indexed Bach corpus.
-    """
     try:
         parsed_melody = [parse_note(token) for token in req.melody]
     except ValueError as e:

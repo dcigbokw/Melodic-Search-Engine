@@ -4,24 +4,24 @@ import os
 from rules_engine import check_parallel_motion, check_crossing_and_spacing
 from rules_engine import check_leading_tone_resolution
 
-MATRIX_FILE = "bach_matrices.pkl"
 # ==========================================
 # PRODUCTION LOADING PHASE
 # ==========================================
-MATRIX_FILE = "bach_matrices.pkl"
+MATRIX_FILE = "multi_composer_matrices.pkl"
 
-# Initialize empty dictionaries as fallbacks
+all_corpora = {}
 transition_matrix = {}
 transition_matrix_2nd_order = {}
 
 try:
     with open(MATRIX_FILE, 'rb') as f:
-        saved_data = pickle.load(f)
-        transition_matrix = saved_data["first_order"]
-        transition_matrix_2nd_order = saved_data["second_order"]
+        all_corpora = pickle.load(f)
+        # Default fallback to Bach for your basic /generate endpoint
+        transition_matrix = all_corpora.get("bach", {}).get("first_order", {})
+        transition_matrix_2nd_order = all_corpora.get("bach", {}).get("second_order", {})
 except FileNotFoundError:
-    # Print a warning instead of halting the entire program!
     print(f"WARNING: {MATRIX_FILE} not found. (Safe to ignore if running mock tests!)")
+
 
 def is_valid_transition(chord_a, chord_b, tonic_pc=0):
     """
@@ -46,7 +46,6 @@ def is_valid_transition(chord_a, chord_b, tonic_pc=0):
 
                 
     return True
-
 
 # ==========================================
 # THE RECURSIVE ENGINE (DFS Backtracking)

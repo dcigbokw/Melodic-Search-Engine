@@ -30,7 +30,7 @@ The Generative AI uses a **Pruned DFS Backtracking** algorithm to solve the expo
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/melodic-search-engine.git
+   git clone https://github.com/dcigbokw/melodic-search-engine.git
    cd melodic-search-engine
    ```
 

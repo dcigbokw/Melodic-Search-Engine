@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bach Generative AI Engine</title>
     
-    <!-- Magic library that renders and plays MIDI files in the browser -->
     <script src="https://cdn.jsdelivr.net/combine/npm/tone@14.7.58,npm/@magenta/music@1.23.1/es6/core.js,npm/focus-visible@5,npm/html-midi-player@1.5.0"></script>
     
     <style>
@@ -18,7 +17,8 @@
         h2 { margin-top: 0; font-size: 1.25rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }
         
         label { font-weight: bold; display: block; margin-top: 15px; font-size: 0.9rem; }
-        input { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; }
+        input, select { padding: 10px; margin-top: 5px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; }
+        select { background-color: white; }
         
         button { background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 15px; width: 100%; transition: background 0.2s; }
         button:hover { background: #1d4ed8; }
@@ -26,8 +26,8 @@
         
         .status { margin-top: 15px; font-size: 0.9rem; font-weight: bold; color: #047857; text-align: center; }
         
-        #player-container { margin-top: 20px; display: none; border-top: 1px solid #e2e8f0; padding-top: 20px; }
-        midi-visualizer { width: 100%; background: #f1f5f9; border-radius: 6px; margin-bottom: 10px; }
+        #player-container, #collab-player-container { margin-top: 20px; display: none; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+        midi-visualizer { width: 100%; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; margin-bottom: 10px; padding: 10px; box-sizing: border-box; }
         
         pre { background: #1e293b; color: #e2e8f0; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
     </style>
@@ -37,7 +37,7 @@
     <h1>Bach AI Engine</h1>
     <p class="subtitle">Generative Counterpoint & Trigram Search API</p>
 
-    <!-- GENERATOR SECTION -->
+    <!-- 1. GENERATOR SECTION -->
     <div class="card">
         <h2>1. Generate a Chorale</h2>
         <p>Uses a trained Markov chain and recursive backtracking to generate a 4-part chorale.</p>
@@ -49,18 +49,101 @@
         <div id="genStatus" class="status"></div>
 
         <div id="player-container">
-            <midi-visualizer type="piano-roll" id="myVisualizer"></midi-visualizer>
+            <midi-visualizer type="staff" id="myVisualizer"></midi-visualizer>
             <midi-player id="myPlayer" visualizer="#myVisualizer" sound-font></midi-player>
         </div>
     </div>
 
-    <!-- SEARCH SECTION -->
+    <!-- 2. CO-CREATIVE WORKSPACE SECTION -->
     <div class="card">
-        <h2>2. Fuzzy Search the Corpus</h2>
+        <h2>2. Co-Creative Workspace (SATB)</h2>
+        <p>Build your progression using specific Soprano, Alto, Tenor, and Bass notes (e.g., C5, G4, E4, C3). Type "rest" to insert rests.</p>
+
+        <div style="display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; align-items: flex-start;">
+            
+            <!-- Combinatorial Sliders -->
+            <div style="flex: 2; min-width: 250px; background: white; padding: 15px; border-radius: 6px; border: 1px solid #cbd5e1;">
+                <label style="margin-top: 0;">Style Blend (Combinatorial Matrix):</label>
+                <div id="composerSliders" style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
+                        <span>Bach:</span>
+                        <input type="range" id="w-bach" min="0" max="100" value="100" style="width: 100px; margin: 0;">
+                        <span id="val-bach" style="width: 40px; text-align: right; font-weight: bold;">100%</span>
+                    </div>
+                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
+                        <span>Beethoven:</span>
+                        <input type="range" id="w-beethoven" min="0" max="100" value="0" style="width: 100px; margin: 0;">
+                        <span id="val-beethoven" style="width: 40px; text-align: right; font-weight: bold;">0%</span>
+                    </div>
+                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
+                        <span>Chopin:</span>
+                        <input type="range" id="w-chopin" min="0" max="100" value="0" style="width: 100px; margin: 0;">
+                        <span id="val-chopin" style="width: 40px; text-align: right; font-weight: bold;">0%</span>
+                    </div>
+                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
+                        <span>Mozart:</span>
+                        <input type="range" id="w-mozart" min="0" max="100" value="0" style="width: 100px; margin: 0;">
+                        <span id="val-mozart" style="width: 40px; text-align: right; font-weight: bold;">0%</span>
+                    </div>
+                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
+                        <span>Tchaikovsky:</span>
+                        <input type="range" id="w-tchaikovsky" min="0" max="100" value="0" style="width: 100px; margin: 0;">
+                        <span id="val-tchaikovsky" style="width: 40px; text-align: right; font-weight: bold;">0%</span>
+                    </div>
+                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
+                        <span>Handel:</span>
+                        <input type="range" id="w-handel" min="0" max="100" value="0" style="width: 100px; margin: 0;">
+                        <span id="val-handel" style="width: 40px; text-align: right; font-weight: bold;">0%</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Expression Constraints -->
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 15px; min-width: 150px;">
+                <div>
+                    <label style="margin-top: 0;">Tempo (Speed):</label>
+                    <select id="tempoSelect" style="width: 100%;">
+                        <option value="adagio">Adagio (Slow)</option>
+                        <option value="andante" selected>Andante (Walking)</option>
+                        <option value="allegro">Allegro (Fast)</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="margin-top: 0;">Dynamics (Volume):</label>
+                    <select id="dynamicSelect" style="width: 100%;">
+                        <option value="piano">Piano (Soft)</option>
+                        <option value="mf" selected>Mezzo-forte (Medium)</option>
+                        <option value="forte">Forte (Loud)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <label>Progression Builder:</label>
+        <div id="chordWorkspace" style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 15px; background: #f1f5f9; border-radius: 6px; border: 1px solid #cbd5e1;">
+            <!-- JavaScript will insert SATB blocks here -->
+        </div>
+        <button id="addChordBtn" style="width: auto; background: #64748b; margin-top: 10px; margin-bottom: 20px;">+ Add SATB Block</button>
+
+        <label>Blocks for AI to add:</label>
+        <input type="number" id="numToAdd" value="4" min="1" max="16" style="width: 100%;"/>
+
+        <button id="extendBtn">AI, Continue This Sequence</button>
+        <div id="extendStatus" class="status"></div>
+
+        <div id="collab-player-container">
+            <midi-visualizer type="staff" id="collabVisualizer"></midi-visualizer>
+            <midi-player id="collabPlayer" visualizer="#collabVisualizer" sound-font></midi-player>
+        </div>
+    </div>
+
+    <!-- 3. SEARCH SECTION -->
+    <div class="card">
+        <h2>3. Fuzzy Search the Corpus</h2>
         <p>Uses an inverted trigram index to find melodic sequences instantly.</p>
         
         <label>Query Melody (MIDI Integers, comma-separated):</label>
-        <input type="text" id="melodyQuery" value="C5, G4, E4, C4" placeholder="e.g., C5, G4, E4, C4 (or MIDI numbers)">
+        <input type="text" id="melodyQuery" value="C5, G4, E4, C4" placeholder="e.g., C5, G4, E4, C4">
         
         <button id="searchBtn">Search Corpus</button>
         <div id="searchStatus" class="status"></div>
@@ -72,26 +155,32 @@
     </div>
 
     <script>
-        // --- GENERATOR LOGIC ---
+        // --- SLIDER LOGIC ---
+        ['bach', 'beethoven', 'chopin', 'mozart', 'tchaikovsky', 'handel'].forEach(comp => {
+            const slider = document.getElementById(`w-${comp}`);
+            slider.addEventListener('input', (e) => {
+                document.getElementById(`val-${comp}`).innerText = `${e.target.value}%`;
+            });
+        });
+
+        // --- 1. GENERATOR LOGIC ---
         document.getElementById('generateBtn').addEventListener('click', async () => {
             const btn = document.getElementById('generateBtn');
             const status = document.getElementById('genStatus');
             const container = document.getElementById('player-container');
-            const numChords = document.getElementById('numChords').value;
             
             btn.disabled = true;
-            status.innerText = "Generating and applying rhythms... (this takes a few seconds)";
+            status.innerText = "Generating... (this takes a few seconds)";
             container.style.display = "none";
 
             try {
                 const response = await fetch('/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ num_chords: parseInt(numChords), top_k: 5 })
+                    body: JSON.stringify({ num_chords: parseInt(document.getElementById('numChords').value), top_k: 5 })
                 });
 
                 if (!response.ok) throw new Error("Generation failed.");
-
                 const blob = await response.blob();
                 const midiUrl = URL.createObjectURL(blob);
                 
@@ -107,34 +196,120 @@
             }
         });
 
-        // --- SEARCH LOGIC ---
+        // --- 2. CO-CREATIVE WORKSPACE LOGIC (SATB) ---
+        const chordWorkspace = document.getElementById('chordWorkspace');
+
+        function createSATBSlot(s = 'C5', a = 'G4', t = 'E4', b = 'C3') {
+            const slot = document.createElement('div');
+            slot.style.cssText = "display: flex; flex-direction: column; gap: 4px; background: white; padding: 10px; border-radius: 6px; border: 1px solid #cbd5e1; align-items: center; width: 80px;";
+            
+            const inputStyle = "width: 100%; padding: 4px; text-align: center; font-weight: bold; font-size: 0.85rem; border: 1px solid #e2e8f0; border-radius: 4px; box-sizing: border-box;";
+            
+            let sInput = `<input type="text" class="voice-s" value="${s}" style="${inputStyle}" title="Soprano">`;
+            let aInput = `<input type="text" class="voice-a" value="${a}" style="${inputStyle}" title="Alto">`;
+            let tInput = `<input type="text" class="voice-t" value="${t}" style="${inputStyle}" title="Tenor">`;
+            let bInput = `<input type="text" class="voice-b" value="${b}" style="${inputStyle}" title="Bass">`;
+            
+            let deleteBtn = `<button onclick="this.parentElement.remove()" style="margin-top: 5px; padding: 2px; width: 100%; background: #ef4444; font-size: 0.75rem;">Delete</button>`;
+            
+            slot.innerHTML = `<span style="font-size: 0.7rem; color: #64748b; margin-bottom: 2px;">SATB</span>` + sInput + aInput + tInput + bInput + deleteBtn;
+            chordWorkspace.appendChild(slot);
+        }
+
+        createSATBSlot('C5', 'G4', 'E4', 'C3');
+        createSATBSlot('B4', 'G4', 'D4', 'G2');
+        
+        document.getElementById('addChordBtn').addEventListener('click', () => createSATBSlot('rest', 'rest', 'rest', 'rest'));
+
+        function renderChordsToWorkspace(satbArrays) {
+            chordWorkspace.innerHTML = ""; 
+            satbArrays.forEach(voices => {
+                createSATBSlot(voices[0], voices[1], voices[2], voices[3]);
+            });
+        }
+
+        document.getElementById('extendBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('extendBtn');
+            const status = document.getElementById('extendStatus');
+            const container = document.getElementById('collab-player-container');
+            
+            const currentChords = Array.from(chordWorkspace.children).map(slot => {
+                return [
+                    slot.querySelector('.voice-s').value.trim(),
+                    slot.querySelector('.voice-a').value.trim(),
+                    slot.querySelector('.voice-t').value.trim(),
+                    slot.querySelector('.voice-b').value.trim()
+                ];
+            });
+            
+            btn.disabled = true;
+            status.innerText = "AI is analyzing voices and composing...";
+
+            try {
+                const response = await fetch('/extend', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        current_chords: currentChords, 
+                        num_to_add: parseInt(document.getElementById('numToAdd').value),
+                        composer_weights: {
+                            bach: parseInt(document.getElementById('w-bach').value),
+                            beethoven: parseInt(document.getElementById('w-beethoven').value),
+                            chopin: parseInt(document.getElementById('w-chopin').value),
+                            mozart: parseInt(document.getElementById('w-mozart').value),
+                            tchaikovsky: parseInt(document.getElementById('w-tchaikovsky').value),
+                            handel: parseInt(document.getElementById('w-handel').value)
+                        },
+                        tempo: document.getElementById('tempoSelect').value,
+                        dynamics: document.getElementById('dynamicSelect').value
+                    })
+                });
+
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.detail || "API Error.");
+                }
+
+                const generatedChordsHeader = response.headers.get("X-Generated-Chords");
+                if (generatedChordsHeader) {
+                    const parsedChords = JSON.parse(generatedChordsHeader);
+                    renderChordsToWorkspace(parsedChords);
+                }
+
+                const blob = await response.blob();
+                const midiUrl = URL.createObjectURL(blob);
+                
+                document.getElementById('collabPlayer').src = midiUrl;
+                document.getElementById('collabVisualizer').src = midiUrl;
+                
+                status.innerText = "Extension successful! Edit the individual voices and continue.";
+                container.style.display = "block";
+            } catch (error) {
+                status.innerText = "Error: " + error.message;
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        // --- 3. SEARCH LOGIC ---
         document.getElementById('searchBtn').addEventListener('click', async () => {
             const btn = document.getElementById('searchBtn');
             const status = document.getElementById('searchStatus');
             const resultsDiv = document.getElementById('searchResults');
-            const jsonView = document.getElementById('searchJson');
-            
             const rawMelody = document.getElementById('melodyQuery').value;
-            // Convert "72, 67, 64" into [72, 67, 64]
             const melodyArray = rawMelody.split(',').map(n => n.trim()).filter(n => n.length > 0);
+            
             btn.disabled = true;
-            status.innerText = "Searching inverted index...";
-            resultsDiv.style.display = "none";
-
+            status.innerText = "Searching...";
+            
             try {
                 const response = await fetch('/search', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ melody: melodyArray, max_distance: 1 })
                 });
-
                 const data = await response.json();
-                
-                if (!response.ok) {
-                    throw new Error(data.detail || "Search failed");
-                }
-
-                jsonView.textContent = JSON.stringify(data, null, 2);
+                document.getElementById('searchJson').textContent = JSON.stringify(data, null, 2);
                 status.innerText = `Found matches in ${data.search_data?.matches_found || 0} locations.`;
                 resultsDiv.style.display = "block";
             } catch (error) {
