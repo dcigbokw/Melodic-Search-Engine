@@ -25,7 +25,7 @@ except FileNotFoundError:
 
 def is_valid_transition(chord_a, chord_b, tonic_pc=0):
     """
-    Acts as the 'Evaluator'. Takes two full chords and ensures moving 
+    Acts as the Evaluator. Takes two full chords and ensures moving 
     between them doesn't break your Phase 2 counterpoint rules.
     """
 

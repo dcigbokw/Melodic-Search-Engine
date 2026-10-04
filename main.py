@@ -8,7 +8,7 @@ import random
 import os
 import uuid
 from chord_generator import compose_chorale_2nd_order, transition_matrix, all_corpora
-from search_engine import encode_intervals, search_bach_corpus
+from search_engine import encode_intervals, search_bach_corpus, advanced_search
 from note_parser import parse_note
 from rhythm_ai import (
     generate_rhythms, 
@@ -17,8 +17,7 @@ from rhythm_ai import (
     train_rhythm_model,
     transition_matrix_rhythm
 )
-from music21 import chord, tempo, stream, midi, pitch
-
+from music21 import chord, tempo, stream, midi, pitch, note
 app = FastAPI(
     title="Bach Generative AI & Search API",
     description="REST API for generating counterpoint and fuzzy-searching the Bach corpus.",
@@ -246,17 +245,57 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
 # ==========================================
 class SearchRequest(BaseModel):
     melody: List[str]
-    max_distance: int = 1
+    algorithm: str = "dtw"
+    composer: str = "all"
+    max_distance: int = 2
 
 @app.post("/search")
-def search_corpus(req: SearchRequest):
+def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
     try:
         parsed_melody = [parse_note(token) for token in req.melody]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if len(parsed_melody) < 4:
-        raise HTTPException(status_code=400, detail="Melody must contain at least 4 notes for trigram indexing.")
+    # Run the multi-dimensional search
+    matches = advanced_search(
+        parsed_melody, 
+        algorithm=req.algorithm, 
+        target_composer=req.composer, 
+        max_dist=req.max_distance
+    )
+    
+    formatted_matches = []
+    
+    # Build sheet music MIDI files for the top results
+    for match in matches:
+        s = stream.Score()
+        p = stream.Part()
+        for midi_val in match["raw_notes"]:
+            n = note.Note()
+            n.pitch.midi = midi_val
+            n.quarterLength = 1.0
+            p.append(n)
+        s.append(p)
+        
+        # Save to the static folder so the frontend can access the URL
+        temp_filename = f"static/match_{uuid.uuid4().hex[:8]}.mid"
+        mf = midi.translate.streamToMidiFile(s)
+        mf.open(temp_filename, 'wb')
+        mf.write()
+        mf.close()
+        
+        # Schedule cleanup so we don't bloat the server
+        background_tasks.add_task(os.remove, temp_filename)
+        
+        formatted_matches.append({
+            "title": match["title"],
+            "composer": match["composer"],
+            "score": match["score"],
+            "midi_url": f"/{temp_filename}" # URL for the visualizer!
+        })
 
-    search_results = search_bach_corpus(parsed_melody, req.max_distance)
-    return {"status": "success", "query_melody": parsed_melody, "search_data": search_results}
+    return {
+        "status": "success", 
+        "algorithm": req.algorithm,
+        "matches": formatted_matches
+    }

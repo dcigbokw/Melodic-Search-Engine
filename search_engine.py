@@ -1,129 +1,84 @@
-from music21 import corpus
 import pickle
-import os
+import numpy as np
 
 INDEX_FILE = "search_index.pkl"
 
-# Load the index into memory on boot
-if os.path.exists(INDEX_FILE):
+try:
     with open(INDEX_FILE, 'rb') as f:
         data = pickle.load(f)
-        PHRASE_DB = data["database"]
-        INVERTED_INDEX = data["inverted_index"]
-else:
-    PHRASE_DB = {}
-    INVERTED_INDEX = {}
+        database = data["database"]
+        inverted_index = data["inverted_index"]
+except FileNotFoundError:
+    database, inverted_index = {}, {}
 
-def get_trigrams(intervals):
-    return [tuple(intervals[i:i+3]) for i in range(len(intervals)-2)]
-# ==========================================
-# THE ENCODER
-# ==========================================
-def encode_intervals(melody):
-    """
-    Takes a list of MIDI pitches and returns a list of the intervals 
-    (the difference in semitones) between each consecutive note.
-    """
-    intervals = []
-    for i in range(len(melody) - 1):
-        intervals.append(melody[i + 1] - melody[i])
-    return intervals
+def encode_intervals(melody_pitches):
+    return [melody_pitches[i+1] - melody_pitches[i] for i in range(len(melody_pitches)-1)]
 
-# ==========================================
-# THE LEVENSHTEIN DISTANCE MATRIX
-# ==========================================
-def levenshtein_distance(seq1, seq2):
-    """Calculates the Edit Distance between two interval arrays."""
-    rows = len(seq1) + 1
-    cols = len(seq2) + 1
-    dp = [[0 for _ in range(cols)] for _ in range(rows)]
+def calculate_levenshtein(q_intervals, t_intervals):
+    """Calculates edit distance (insertions, deletions, substitutions)."""
+    n, m = len(q_intervals), len(t_intervals)
+    dp = np.zeros((n + 1, m + 1))
     
-    for i in range(1, rows):
-        dp[i][0] = i
-    for j in range(1, cols):
-        dp[0][j] = j
+    for i in range(n + 1): dp[i][0] = i
+    for j in range(m + 1): dp[0][j] = j
         
-    for i in range(1, rows):
-        for j in range(1, cols):
-            cost = 0 if seq1[i-1] == seq2[j-1] else 1
-            dp[i][j] = min(
-                dp[i-1][j] + 1,       # Deletion
-                dp[i][j-1] + 1,       # Insertion
-                dp[i-1][j-1] + cost   # Substitution
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if q_intervals[i-1] == t_intervals[j-1]:
+                dp[i][j] = dp[i-1][j-1]
+            else:
+                dp[i][j] = 1 + min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
+    return int(dp[n][m])
+
+def calculate_dtw(q_intervals, t_intervals):
+    """Dynamic Time Warping: Tolerates rhythmic warping and ornamental notes."""
+    n, m = len(q_intervals), len(t_intervals)
+    dtw = np.full((n + 1, m + 1), float('inf'))
+    dtw[0, 0] = 0
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = abs(q_intervals[i-1] - t_intervals[j-1])
+            dtw[i, j] = cost + min(
+                dtw[i-1, j],    # Insertion
+                dtw[i, j-1],    # Deletion
+                dtw[i-1, j-1]   # Match
             )
-    return dp[rows-1][cols-1]
+    return int(dtw[n, m])
 
-# ==========================================
-# THE FUZZY SEARCH
-# ==========================================
-def fuzzy_search_melody(query_intervals, target_intervals, max_distance=1):
-    """Slides a window to find matches within the max edit distance."""
-    matches = []
-    query_len = len(query_intervals)
-    target_len = len(target_intervals)
+def advanced_search(query_pitches, algorithm="dtw", target_composer="all", max_dist=2):
+    """Filters by composer, then scores using the chosen algorithm."""
+    if len(query_pitches) < 2: return []
+    query_intervals = encode_intervals(query_pitches)
     
-    if query_len > target_len:
-        return matches
-
-    for i in range(target_len - query_len + 1):
-        current_window = target_intervals[i : i + query_len]
-        dist = levenshtein_distance(query_intervals, current_window)
-        if dist <= max_distance:
-            matches.append((i, dist))
-            
-    return matches
-
-# ==========================================
-# THE CORPUS DATA PIPELINE
-# ==========================================
-def search_bach_corpus(query_melody, max_distance=1):
-    """
-    A true production search engine: Filter-then-Verify.
-    """
-    if not PHRASE_DB:
-        return {"error": "Search index not found. Run build_index.py first."}
-        
-    query_intervals = encode_intervals(query_melody)
-    query_trigrams = get_trigrams(query_intervals)
+    results = []
     
-    # 1. THE FILTER PHASE (O(1) lookups)
-    # We only look at phrases that share AT LEAST ONE trigram with the query
-    candidate_ids = set()
-    for trigram in query_trigrams:
-        if trigram in INVERTED_INDEX:
-            candidate_ids.update(INVERTED_INDEX[trigram])
+    # Iterate over every phrase in the database
+    for pid, phrase_data in database.items():
+        # 1. Apply Composer Filter
+        if target_composer != "all" and phrase_data["composer"] != target_composer:
+            continue
             
-    if not candidate_ids:
-        return {"matches_found": 0, "results": []}
+        target_intervals = phrase_data["intervals"]
         
-    # 2. THE VERIFICATION PHASE (Levenshtein DP)
-    # We only run the expensive math on the narrowed-down candidate list!
-    final_results = []
-    for phrase_id in candidate_ids:
-        target_intervals = PHRASE_DB[phrase_id]["intervals"]
-        
-        # Run your existing fuzzy search function!
-        matches = fuzzy_search_melody(query_intervals, target_intervals, max_distance)
-        
-        if matches:
-            final_results.append({
-                "title": PHRASE_DB[phrase_id]["title"],
-                "phrase_id": phrase_id,
-                "edit_distances": [dist for index, dist in matches]
+        # 2. Apply Algorithm Score
+        if algorithm == "dtw":
+            score = calculate_dtw(query_intervals, target_intervals)
+        elif algorithm == "levenshtein":
+            score = calculate_levenshtein(query_intervals, target_intervals)
+        else: # Trigram (Exact Match Fallback)
+            score = 0 if query_intervals == target_intervals else 999
+            
+        # 3. Keep matches within the threshold
+        if score <= max_dist:
+            results.append({
+                "phrase_id": pid,
+                "title": phrase_data["title"],
+                "composer": phrase_data["composer"].capitalize(),
+                "score": score,
+                "raw_notes": phrase_data["raw_notes"]
             })
             
-    return {
-        "matches_found": len(final_results),
-        "candidates_filtered": len(candidate_ids),
-        "results": final_results
-    }
-# ==========================================
-# RUN THE ENGINE!
-# ==========================================
-if __name__ == "__main__":
-    # Query: Do-Re-Mi-Fa (e.g., C, D, E, F)
-    # The intervals will be: [+2, +2, +1]
-    my_query = [60, 62, 64, 65] 
-    
-    # Let's search 100 chorales with a strict exact match 
-    print(search_bach_corpus(my_query, max_distance=0,))
+    # Sort by best score (lowest distance)
+    results.sort(key=lambda x: x["score"])
+    return results[:5] # Return top 5 matches

@@ -29,13 +29,17 @@
         #player-container, #collab-player-container { margin-top: 20px; display: none; border-top: 1px solid #e2e8f0; padding-top: 20px; }
         midi-visualizer { width: 100%; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; margin-bottom: 10px; padding: 10px; box-sizing: border-box; }
         
+        .match-card { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 8px; padding: 15px; margin-top: 15px; }
+        .match-card h4 { margin: 0 0 5px 0; color: var(--primary); }
+        .match-meta { font-size: 0.85rem; color: #64748b; margin-bottom: 10px; }
+        
         pre { background: #1e293b; color: #e2e8f0; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
     </style>
 </head>
 <body>
 
     <h1>Bach AI Engine</h1>
-    <p class="subtitle">Generative Counterpoint & Trigram Search API</p>
+    <p class="subtitle">Generative Counterpoint & Multi-Dimensional Search Engine</p>
 
     <!-- 1. GENERATOR SECTION -->
     <div class="card">
@@ -137,21 +141,46 @@
         </div>
     </div>
 
-    <!-- 3. SEARCH SECTION -->
+    <!-- 3. ADVANCED APPROXIMATE SEARCH SECTION -->
     <div class="card">
-        <h2>3. Fuzzy Search the Corpus</h2>
-        <p>Uses an inverted trigram index to find melodic sequences instantly.</p>
+        <h2>3. Advanced Cross-Corpus Search</h2>
+        <p>Perform multi-dimensional searches across composers using exact trigrams or fuzzy alignment algorithms.</p>
         
-        <label>Query Melody (MIDI Integers, comma-separated):</label>
+        <div style="display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 180px;">
+                <label style="margin-top: 0;">Search Algorithm:</label>
+                <select id="searchAlgo" style="width: 100%;">
+                    <option value="dtw" selected>Dynamic Time Warping (DTW)</option>
+                    <option value="levenshtein">Levenshtein (Edit Distance)</option>
+                    <option value="trigram">Inverted Trigram Index (Exact)</option>
+                </select>
+            </div>
+            <div style="flex: 1; min-width: 180px;">
+                <label style="margin-top: 0;">Corpus Filter:</label>
+                <select id="searchCorpus" style="width: 100%;">
+                    <option value="all" selected>All Composers</option>
+                    <option value="bach">J.S. Bach</option>
+                    <option value="beethoven">Beethoven</option>
+                    <option value="chopin">Chopin</option>
+                    <option value="mozart">Mozart</option>
+                    <option value="tchaikovsky">Tchaikovsky</option>
+                    <option value="handel">Handel</option>
+                </select>
+            </div>
+            <div style="flex: 1; min-width: 120px;">
+                <label style="margin-top: 0;">Max Distance:</label>
+                <input type="number" id="maxDistance" value="2" min="0" max="10" style="width: 100%;">
+            </div>
+        </div>
+
+        <label>Query Melody (Note Names or MIDI Integers):</label>
         <input type="text" id="melodyQuery" value="C5, G4, E4, C4" placeholder="e.g., C5, G4, E4, C4">
         
         <button id="searchBtn">Search Corpus</button>
         <div id="searchStatus" class="status"></div>
         
-        <div id="searchResults" style="display: none;">
-            <label>JSON Response:</label>
-            <pre id="searchJson"></pre>
-        </div>
+        <!-- Rendered Sheet Music Results Container -->
+        <div id="visualSearchResults" style="margin-top: 20px;"></div>
     </div>
 
     <script>
@@ -291,27 +320,62 @@
             }
         });
 
-        // --- 3. SEARCH LOGIC ---
+        // --- 3. ADVANCED SEARCH LOGIC (VISUAL SHEET MUSIC RESULTS) ---
         document.getElementById('searchBtn').addEventListener('click', async () => {
             const btn = document.getElementById('searchBtn');
             const status = document.getElementById('searchStatus');
-            const resultsDiv = document.getElementById('searchResults');
+            const resultsContainer = document.getElementById('visualSearchResults');
             const rawMelody = document.getElementById('melodyQuery').value;
             const melodyArray = rawMelody.split(',').map(n => n.trim()).filter(n => n.length > 0);
             
             btn.disabled = true;
-            status.innerText = "Searching...";
-            
+            status.innerText = "Searching corpora & calculating alignment...";
+            resultsContainer.innerHTML = ""; // Clear old results
+
             try {
                 const response = await fetch('/search', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ melody: melodyArray, max_distance: 1 })
+                    body: JSON.stringify({ 
+                        melody: melodyArray, 
+                        algorithm: document.getElementById('searchAlgo').value,
+                        composer: document.getElementById('searchCorpus').value,
+                        max_distance: parseInt(document.getElementById('maxDistance').value)
+                    })
                 });
+
                 const data = await response.json();
-                document.getElementById('searchJson').textContent = JSON.stringify(data, null, 2);
-                status.innerText = `Found matches in ${data.search_data?.matches_found || 0} locations.`;
-                resultsDiv.style.display = "block";
+                
+                if (!response.ok) throw new Error(data.detail || "Search query failed.");
+
+                const matches = data.matches || [];
+                status.innerText = `Found ${matches.length} score match(es) using ${data.algorithm.toUpperCase()}.`;
+
+                if (matches.length === 0) {
+                    resultsContainer.innerHTML = `<p style="text-align: center; color: #64748b;">No matching phrases found within the specified distance limit.</p>`;
+                    return;
+                }
+
+                // Dynamically build sheet music visualizers for each match
+                matches.forEach((match, index) => {
+                    const card = document.createElement('div');
+                    card.className = "match-card";
+                    
+                    const visId = `searchVis_${index}`;
+                    const playerId = `searchPlayer_${index}`;
+
+                    card.innerHTML = `
+                        <h4>Match #${index + 1}: ${match.title}</h4>
+                        <div class="match-meta">
+                            <strong>Composer:</strong> ${match.composer} | 
+                            <strong>Algorithm Score (${data.algorithm.toUpperCase()}):</strong> ${match.score}
+                        </div>
+                        <midi-visualizer type="staff" id="${visId}" src="${match.midi_url}"></midi-visualizer>
+                        <midi-player id="${playerId}" visualizer="#${visId}" sound-font src="${match.midi_url}"></midi-player>
+                    `;
+                    resultsContainer.appendChild(card);
+                });
+
             } catch (error) {
                 status.innerText = "Error: " + error.message;
             } finally {
