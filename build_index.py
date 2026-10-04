@@ -20,7 +20,7 @@ def build_search_index():
     
     for comp in composers:
         print(f"\nIndexing corpus: {comp.upper()}")
-        bundles = corpus.getComposer(comp)[:100] 
+        bundles = corpus.getComposer(comp) 
         
         for idx, score_path in enumerate(bundles):
             try:

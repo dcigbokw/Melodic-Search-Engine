@@ -6,6 +6,7 @@ from typing import List
 import json
 import random
 import os
+import asyncio
 import uuid
 from chord_generator import compose_chorale_2nd_order, transition_matrix, all_corpora
 from search_engine import encode_intervals, advanced_search
@@ -17,12 +18,15 @@ from rhythm_ai import (
     train_rhythm_model,
     transition_matrix_rhythm
 )
-from music21 import chord, tempo, stream, midi, pitch, note
+from music21 import chord, tempo, stream, midi, pitch, note, instrument
 app = FastAPI(
     title="Bach Generative AI & Search API",
     description="REST API for generating counterpoint and fuzzy-searching the Bach corpus.",
     version="1.0.0"
 )
+
+# Create the static directory if it doesn't exist
+os.makedirs("static", exist_ok=True)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -243,11 +247,21 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
 # ==========================================
 # 4. THE SEARCH ENDPOINT
 # ==========================================
+async def delayed_cleanup(filepath: str, delay: int = 15):
+    """Waits for a set number of seconds, then deletes the temporary file."""
+    await asyncio.sleep(delay)
+    try:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+    except OSError:
+        pass
+
 class SearchRequest(BaseModel):
     melody: List[str]
     algorithm: str = "dtw"
     composer: str = "all"
-    max_distance: int = 2
+    max_distance: int = 5
+    instrument_name: str = "piano" # Added instrument state
 
 @app.post("/search")
 def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
@@ -256,7 +270,6 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Run the multi-dimensional search
     matches = advanced_search(
         parsed_melody, 
         algorithm=req.algorithm, 
@@ -265,11 +278,26 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
     )
     
     formatted_matches = []
+    os.makedirs("static", exist_ok=True)
     
-    # Build sheet music MIDI files for the top results
+    # Map the UI strings to actual music21 Instrument objects
+    inst_map = {
+        "piano": instrument.Piano(),
+        "harpsichord": instrument.Harpsichord(),
+        "violin": instrument.Violin(),
+        "cello": instrument.Violoncello(),
+        "flute": instrument.Flute(),
+        "organ": instrument.PipeOrgan()
+    }
+    
     for match in matches:
         s = stream.Score()
         p = stream.Part()
+        
+        # Inject the selected instrument at the beginning of the stream
+        chosen_inst = inst_map.get(req.instrument_name.lower(), instrument.Piano())
+        p.insert(0, chosen_inst)
+        
         for midi_val in match["raw_notes"]:
             n = note.Note()
             n.pitch.midi = midi_val
@@ -277,21 +305,19 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
             p.append(n)
         s.append(p)
         
-        # Save to the static folder so the frontend can access the URL
         temp_filename = f"static/match_{uuid.uuid4().hex[:8]}.mid"
         mf = midi.translate.streamToMidiFile(s)
         mf.open(temp_filename, 'wb')
         mf.write()
         mf.close()
         
-        # Schedule cleanup so we don't bloat the server
-        background_tasks.add_task(os.remove, temp_filename)
+        background_tasks.add_task(delayed_cleanup, temp_filename, 15)
         
         formatted_matches.append({
             "title": match["title"],
             "composer": match["composer"],
             "score": match["score"],
-            "midi_url": f"/{temp_filename}" # URL for the visualizer!
+            "midi_url": f"/{temp_filename}" 
         })
 
     return {

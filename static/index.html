@@ -61,11 +61,10 @@
     <!-- 2. CO-CREATIVE WORKSPACE SECTION -->
     <div class="card">
         <h2>2. Co-Creative Workspace (SATB)</h2>
-        <p>Build your progression using specific Soprano, Alto, Tenor, and Bass notes (e.g., C5, G4, E4, C3). Type "rest" to insert rests.</p>
+        <p>Build your progression using specific Soprano, Alto, Tenor, and Bass notes. Type "rest" to insert rests.</p>
 
         <div style="display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; align-items: flex-start;">
             
-            <!-- Combinatorial Sliders -->
             <div style="flex: 2; min-width: 250px; background: white; padding: 15px; border-radius: 6px; border: 1px solid #cbd5e1;">
                 <label style="margin-top: 0;">Style Blend (Combinatorial Matrix):</label>
                 <div id="composerSliders" style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
@@ -102,7 +101,6 @@
                 </div>
             </div>
 
-            <!-- Expression Constraints -->
             <div style="flex: 1; display: flex; flex-direction: column; gap: 15px; min-width: 150px;">
                 <div>
                     <label style="margin-top: 0;">Tempo (Speed):</label>
@@ -124,9 +122,7 @@
         </div>
 
         <label>Progression Builder:</label>
-        <div id="chordWorkspace" style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 15px; background: #f1f5f9; border-radius: 6px; border: 1px solid #cbd5e1;">
-            <!-- JavaScript will insert SATB blocks here -->
-        </div>
+        <div id="chordWorkspace" style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 15px; background: #f1f5f9; border-radius: 6px; border: 1px solid #cbd5e1;"></div>
         <button id="addChordBtn" style="width: auto; background: #64748b; margin-top: 10px; margin-bottom: 20px;">+ Add SATB Block</button>
 
         <label>Blocks for AI to add:</label>
@@ -146,16 +142,16 @@
         <h2>3. Advanced Cross-Corpus Search</h2>
         <p>Perform multi-dimensional searches across composers using exact trigrams or fuzzy alignment algorithms.</p>
         
-        <div style="display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap;">
-            <div style="flex: 1; min-width: 180px;">
+        <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 140px;">
                 <label style="margin-top: 0;">Search Algorithm:</label>
                 <select id="searchAlgo" style="width: 100%;">
-                    <option value="dtw" selected>Dynamic Time Warping (DTW)</option>
-                    <option value="levenshtein">Levenshtein (Edit Distance)</option>
-                    <option value="trigram">Inverted Trigram Index (Exact)</option>
+                    <option value="dtw" selected>Dynamic Time Warping</option>
+                    <option value="levenshtein">Levenshtein (Edit)</option>
+                    <option value="trigram">Trigram (Exact)</option>
                 </select>
             </div>
-            <div style="flex: 1; min-width: 180px;">
+            <div style="flex: 1; min-width: 140px;">
                 <label style="margin-top: 0;">Corpus Filter:</label>
                 <select id="searchCorpus" style="width: 100%;">
                     <option value="all" selected>All Composers</option>
@@ -167,9 +163,20 @@
                     <option value="handel">Handel</option>
                 </select>
             </div>
-            <div style="flex: 1; min-width: 120px;">
-                <label style="margin-top: 0;">Max Distance:</label>
-                <input type="number" id="maxDistance" value="2" min="0" max="10" style="width: 100%;">
+            <div style="flex: 1; min-width: 140px;">
+                <label style="margin-top: 0;">Playback Instrument:</label>
+                <select id="searchInstrument" style="width: 100%;">
+                    <option value="piano" selected>Piano</option>
+                    <option value="harpsichord">Harpsichord</option>
+                    <option value="violin">Violin / Strings</option>
+                    <option value="cello">Cello</option>
+                    <option value="flute">Flute</option>
+                    <option value="organ">Pipe Organ</option>
+                </select>
+            </div>
+            <div style="flex: 1; min-width: 90px;">
+                <label style="margin-top: 0;">Max Dist:</label>
+                <input type="number" id="maxDistance" value="5" min="0" max="20" style="width: 100%;">
             </div>
         </div>
 
@@ -179,7 +186,6 @@
         <button id="searchBtn">Search Corpus</button>
         <div id="searchStatus" class="status"></div>
         
-        <!-- Rendered Sheet Music Results Container -->
         <div id="visualSearchResults" style="margin-top: 20px;"></div>
     </div>
 
@@ -320,7 +326,7 @@
             }
         });
 
-        // --- 3. ADVANCED SEARCH LOGIC (VISUAL SHEET MUSIC RESULTS) ---
+        // --- 3. ADVANCED SEARCH LOGIC ---
         document.getElementById('searchBtn').addEventListener('click', async () => {
             const btn = document.getElementById('searchBtn');
             const status = document.getElementById('searchStatus');
@@ -330,7 +336,7 @@
             
             btn.disabled = true;
             status.innerText = "Searching corpora & calculating alignment...";
-            resultsContainer.innerHTML = ""; // Clear old results
+            resultsContainer.innerHTML = ""; 
 
             try {
                 const response = await fetch('/search', {
@@ -340,7 +346,8 @@
                         melody: melodyArray, 
                         algorithm: document.getElementById('searchAlgo').value,
                         composer: document.getElementById('searchCorpus').value,
-                        max_distance: parseInt(document.getElementById('maxDistance').value)
+                        max_distance: parseInt(document.getElementById('maxDistance').value),
+                        instrument_name: document.getElementById('searchInstrument').value
                     })
                 });
 
@@ -356,11 +363,9 @@
                     return;
                 }
 
-                // Dynamically build sheet music visualizers for each match
                 matches.forEach((match, index) => {
                     const card = document.createElement('div');
                     card.className = "match-card";
-                    
                     const visId = `searchVis_${index}`;
                     const playerId = `searchPlayer_${index}`;
 
@@ -368,7 +373,7 @@
                         <h4>Match #${index + 1}: ${match.title}</h4>
                         <div class="match-meta">
                             <strong>Composer:</strong> ${match.composer} | 
-                            <strong>Algorithm Score (${data.algorithm.toUpperCase()}):</strong> ${match.score}
+                            <strong>Score:</strong> ${match.score}
                         </div>
                         <midi-visualizer type="staff" id="${visId}" src="${match.midi_url}"></midi-visualizer>
                         <midi-player id="${playerId}" visualizer="#${visId}" sound-font src="${match.midi_url}"></midi-player>
