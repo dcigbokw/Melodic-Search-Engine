@@ -8,7 +8,7 @@ import random
 import os
 import uuid
 from chord_generator import compose_chorale_2nd_order, transition_matrix, all_corpora
-from search_engine import encode_intervals, search_bach_corpus, advanced_search
+from search_engine import encode_intervals, advanced_search
 from note_parser import parse_note
 from rhythm_ai import (
     generate_rhythms, 
