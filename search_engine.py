@@ -6,13 +6,9 @@ INDEX_FILE = "search_index.pkl"
 try:
     with open(INDEX_FILE, 'rb') as f:
         data = pickle.load(f)
-        database = data["database"]
-        inverted_index = data["inverted_index"]
+        database = data.get("database", {})
 except FileNotFoundError:
-    database, inverted_index = {}, {}
-
-def encode_intervals(melody_pitches):
-    return [melody_pitches[i+1] - melody_pitches[i] for i in range(len(melody_pitches)-1)]
+    database = {}
 
 def calculate_levenshtein(q_intervals, t_intervals):
     """Calculates edit distance (insertions, deletions, substitutions)."""
@@ -46,39 +42,72 @@ def calculate_dtw(q_intervals, t_intervals):
             )
     return int(dtw[n, m])
 
-def advanced_search(query_pitches, algorithm="dtw", target_composer="all", max_dist=2):
-    """Filters by composer, then scores using the chosen algorithm."""
-    if len(query_pitches) < 2: return []
-    query_intervals = encode_intervals(query_pitches)
+def calculate_horizontal_intervals(midi_list):
+    """Measures the melodic jumps from note to note."""
+    if len(midi_list) < 2: return []
+    return [midi_list[i] - midi_list[i-1] for i in range(1, len(midi_list))]
+
+def calculate_vertical_intervals(midi_list):
+    """Measures exact chord voicing and inversion relative to the bass note."""
+    if not midi_list: return []
+    # Ensure the notes are sorted lowest to highest to identify the bass
+    sorted_midi = sorted(midi_list)
+    bass = sorted_midi[0]
+    return [n - bass for n in sorted_midi]
+
+def advanced_search(query_notes, algorithm="dtw", target_composer="all", max_dist=5, mode="exact", max_results=5):
+    # 1. Transform the query based on the selected mode
+    if mode == "relative":
+        target_sequence = calculate_horizontal_intervals(query_notes)
+        db_key = "horizontal_intervals" 
+    elif mode == "relative_vertical":
+        target_sequence = calculate_vertical_intervals(query_notes)
+        db_key = "vertical_intervals" 
+    elif mode == "exact_vertical":
+        target_sequence = sorted(query_notes) # Just sorts the exact pitches bottom-to-top
+        db_key = "exact_vertical_notes"
+    else:
+        target_sequence = query_notes
+        db_key = "raw_notes"
     
     results = []
-    
-    # Iterate over every phrase in the database
-    for pid, phrase_data in database.items():
-        # 1. Apply Composer Filter
-        if target_composer != "all" and phrase_data["composer"] != target_composer:
+
+    # 2. Iterate over the values in the loaded dictionary
+    for entry in database.values():
+        # Filter by composer
+        if target_composer != "all" and entry.get("composer") != target_composer:
             continue
             
-        target_intervals = phrase_data["intervals"]
-        
-        # 2. Apply Algorithm Score
+        db_sequence = entry.get(db_key, [])
+        if not db_sequence:
+            continue
+
+        # 3. Calculate Distance
         if algorithm == "dtw":
-            score = calculate_dtw(query_intervals, target_intervals)
+            score = calculate_dtw(target_sequence, db_sequence)
         elif algorithm == "levenshtein":
-            score = calculate_levenshtein(query_intervals, target_intervals)
-        else: # Trigram (Exact Match Fallback)
-            score = 0 if query_intervals == target_intervals else 999
-            
-        # 3. Keep matches within the threshold
+            score = calculate_levenshtein(target_sequence, db_sequence)
+        else:
+            # Exact Trigram search fallback
+            score = 0 if target_sequence == db_sequence else float('inf')
+
+        # 4. Filter by the user's max distance threshold
         if score <= max_dist:
+            # Intercept vertical searches to only return the single matched chord (Max 4 voices)
+            if mode in ["exact_vertical", "relative_vertical"]:
+                display_notes = entry.get("exact_vertical_notes", [])[:4] 
+            else:
+                display_notes = entry.get("raw_notes", [])
+
             results.append({
-                "phrase_id": pid,
-                "title": phrase_data["title"],
-                "composer": phrase_data["composer"].capitalize(),
+                "title": entry.get("title", "Unknown"),
+                "composer": entry.get("composer", "Unknown"),
                 "score": score,
-                "raw_notes": phrase_data["raw_notes"]
+                "raw_notes": display_notes # Safely overridden
             })
-            
-    # Sort by best score (lowest distance)
+
+    # Sort results by closest match (lowest score)
     results.sort(key=lambda x: x["score"])
-    return results[:5] # Return top 5 matches
+
+    # Slice the array to respect the user's max_results preference
+    return results[:max_results]

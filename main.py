@@ -9,7 +9,7 @@ import os
 import asyncio
 import uuid
 from chord_generator import compose_chorale_2nd_order, transition_matrix, all_corpora, is_valid_transition
-from search_engine import encode_intervals, advanced_search
+from search_engine import advanced_search
 from note_parser import parse_note
 from rules_engine import audit_human_sequence
 from rhythm_ai import (
@@ -37,6 +37,17 @@ def serve_frontend():
 if not transition_matrix_rhythm:
     print("No rhythm matrix found in memory. Training model...")
     transition_matrix_rhythm.update(train_rhythm_model())
+
+# ==========================================
+# ASYNC CLEANUP UTILITY
+# ==========================================
+async def delayed_cleanup(filepath: str, delay: int = 15):
+    await asyncio.sleep(delay)
+    try:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+    except OSError:
+        pass
 
 # ==========================================
 # 1. THE GENERATOR ENDPOINT
@@ -71,15 +82,17 @@ def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
             rhythms = generate_rhythms(num_chords=len(song))
             polished_song, polished_rhythms = inject_passing_tones(song, rhythms, tonic_pc=tonic_pc)
             
-            temp_filename = f"generated_{uuid.uuid4().hex[:8]}.mid"
+            # Save to static directory
+            temp_filename = f"static/generated_{uuid.uuid4().hex[:8]}.mid"
             export_to_midi_with_rhythm(polished_song, polished_rhythms, filename=temp_filename)
-            background_tasks.add_task(os.remove, temp_filename)
             
-            return FileResponse(
-                temp_filename, 
-                media_type="audio/midi", 
-                filename="bach_ai_chorale.mid"
-            )
+            # Use delayed cleanup to avoid file locks
+            background_tasks.add_task(delayed_cleanup, temp_filename, 15)
+            
+            # Buffer into memory and return Response
+            with open(temp_filename, "rb") as f:
+                midi_data = f.read()
+            return Response(content=midi_data, media_type="audio/midi")
             
     raise HTTPException(
         status_code=500, 
@@ -164,7 +177,6 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
 
     human_sequence = [satb_to_midi_tuple(block) for block in req.current_chords]
     
-    # Audit the human edits before proceeding
     is_clean, error_msg = audit_human_sequence(human_sequence, is_valid_transition)
     if not is_clean:
         raise HTTPException(status_code=400, detail=error_msg)
@@ -185,16 +197,15 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
             choices = list(next_options.keys())
             weights = list(next_options.values())
             
-            # Select next chord with a fallback if rules fail
             valid_next = None
-            for _ in range(10): # Try up to 10 weighted random selections to find a valid counterpoint rule match
+            for _ in range(10): 
                 candidate = random.choices(choices, weights=weights, k=1)[0]
                 if is_valid_transition(current_state, candidate):
                     valid_next = candidate
                     break
             
             if not valid_next:
-                valid_next = random.choices(choices, weights=weights, k=1)[0] # Fallback to raw probabilities if strict rules corner it
+                valid_next = random.choices(choices, weights=weights, k=1)[0]
                 
             ai_extension.append(valid_next)
             current_state = valid_next
@@ -250,20 +261,15 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
 # ==========================================
 # 4. THE SEARCH ENDPOINT
 # ==========================================
-async def delayed_cleanup(filepath: str, delay: int = 15):
-    await asyncio.sleep(delay)
-    try:
-        if os.path.exists(filepath):
-            os.remove(filepath)
-    except OSError:
-        pass
-
 class SearchRequest(BaseModel):
     melody: List[str]
     algorithm: str = "dtw"
     composer: str = "all"
     max_distance: int = 5
     instrument_name: str = "piano" 
+    search_mode: str = "exact"      
+    max_results: int = 5
+    playback_style: str = "default"            
 
 @app.post("/search")
 def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
@@ -276,11 +282,12 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
         parsed_melody, 
         algorithm=req.algorithm, 
         target_composer=req.composer, 
-        max_dist=req.max_distance
+        max_dist=req.max_distance,
+        mode=req.search_mode,        
+        max_results=req.max_results  
     )
-    
+
     formatted_matches = []
-    os.makedirs("static", exist_ok=True)
     
     inst_map = {
         "piano": instrument.Piano(),
@@ -294,15 +301,32 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
     for match in matches:
         s = stream.Score()
         p = stream.Part()
-        
         chosen_inst = inst_map.get(req.instrument_name.lower(), instrument.Piano())
         p.insert(0, chosen_inst)
         
-        for midi_val in match["raw_notes"]:
-            n = note.Note()
-            n.pitch.midi = midi_val
-            n.quarterLength = 1.0
-            p.append(n)
+        # Determine rendering style based on user preference
+        is_chord = False
+        if req.playback_style == "chord":
+            is_chord = True
+        elif req.playback_style == "arpeggio":
+            is_chord = False
+        else: # Fallback to default behavior if accessed from the melodic tab
+            if req.search_mode in ["exact_vertical", "relative_vertical"]:
+                is_chord = True
+
+        if is_chord:
+            # Render the notes simultaneously as a single block chord
+            c_obj = chord.Chord([pitch.Pitch(midi=m) for m in match["raw_notes"]])
+            c_obj.quarterLength = 2.0  # Let it ring out for 2 beats
+            p.append(c_obj)
+        else:
+            # Render horizontally as a sequential arpeggio/melody
+            for midi_val in match["raw_notes"]:
+                n = note.Note()
+                n.pitch.midi = midi_val
+                n.quarterLength = 1.0
+                p.append(n)
+                
         s.append(p)
         
         temp_filename = f"static/match_{uuid.uuid4().hex[:8]}.mid"

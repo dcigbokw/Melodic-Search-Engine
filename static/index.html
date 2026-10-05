@@ -137,22 +137,29 @@
         </div>
     </div>
 
-    <!-- 3. ADVANCED APPROXIMATE SEARCH SECTION -->
+    <!-- 3. HORIZONTAL (MELODIC) SEARCH SECTION -->
     <div class="card">
-        <h2>3. Advanced Cross-Corpus Search</h2>
-        <p>Perform multi-dimensional searches across composers using exact trigrams or fuzzy alignment algorithms.</p>
+        <h2>3. Horizontal (Melodic) Cross-Corpus Search</h2>
+        <p>Trace a melody over time across composers. Choose between exact pitches or transposition-invariant intervals.</p>
         
         <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
             <div style="flex: 1; min-width: 140px;">
-                <label style="margin-top: 0;">Search Algorithm:</label>
+                <label style="margin-top: 0;">Search Mode:</label>
+                <select id="searchMode" style="width: 100%;">
+                    <option value="exact" selected>Exact Melodic Pitch</option>
+                    <option value="relative">Sounds Like This (Transposition-Invariant)</option>
+                </select>
+            </div>
+            <div style="flex: 1; min-width: 140px;">
+                <label style="margin-top: 0;">Algorithm:</label>
                 <select id="searchAlgo" style="width: 100%;">
                     <option value="dtw" selected>Dynamic Time Warping</option>
                     <option value="levenshtein">Levenshtein (Edit)</option>
                     <option value="trigram">Trigram (Exact)</option>
                 </select>
             </div>
-            <div style="flex: 1; min-width: 140px;">
-                <label style="margin-top: 0;">Corpus Filter:</label>
+            <div style="flex: 1; min-width: 120px;">
+                <label style="margin-top: 0;">Corpus:</label>
                 <select id="searchCorpus" style="width: 100%;">
                     <option value="all" selected>All Composers</option>
                     <option value="bach">J.S. Bach</option>
@@ -163,30 +170,100 @@
                     <option value="handel">Handel</option>
                 </select>
             </div>
-            <div style="flex: 1; min-width: 140px;">
-                <label style="margin-top: 0;">Playback Instrument:</label>
+            <div style="flex: 1; min-width: 120px;">
+                <label style="margin-top: 0;">Instrument:</label>
                 <select id="searchInstrument" style="width: 100%;">
                     <option value="piano" selected>Piano</option>
                     <option value="harpsichord">Harpsichord</option>
-                    <option value="violin">Violin / Strings</option>
-                    <option value="cello">Cello</option>
-                    <option value="flute">Flute</option>
+                    <option value="violin">Strings</option>
                     <option value="organ">Pipe Organ</option>
                 </select>
             </div>
-            <div style="flex: 1; min-width: 90px;">
+            <div style="flex: 1; min-width: 80px;">
                 <label style="margin-top: 0;">Max Dist:</label>
                 <input type="number" id="maxDistance" value="5" min="0" max="20" style="width: 100%;">
             </div>
+            <div style="flex: 1; min-width: 80px;">
+                <label style="margin-top: 0;">Max Results:</label>
+                <input type="number" id="maxResults" value="5" min="1" max="50" style="width: 100%;">
+            </div>
         </div>
 
-        <label>Query Melody (Note Names or MIDI Integers):</label>
-        <input type="text" id="melodyQuery" value="C5, G4, E4, C4" placeholder="e.g., C5, G4, E4, C4">
+        <label>Query Melody (e.g., C5, G4, E4, C4):</label>
+        <input type="text" id="melodyQuery" value="C5, G4, E4, C4">
         
-        <button id="searchBtn">Search Corpus</button>
+        <button id="searchBtn">Search Melodies</button>
         <div id="searchStatus" class="status"></div>
-        
         <div id="visualSearchResults" style="margin-top: 20px;"></div>
+    </div>
+
+    <!-- 4. VERTICAL (HARMONIC) SEARCH SECTION -->
+    <div class="card">
+        <h2>4. Vertical (Harmonic) Cross-Corpus Search</h2>
+        <p>Search for specific vertical chord structures, spacings, and inversions.</p>
+        
+        <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 140px;">
+                <label style="margin-top: 0;">Algorithm:</label>
+                <select id="vertSearchAlgo" style="width: 100%;">
+                    <option value="dtw" selected>Dynamic Time Warping</option>
+                    <option value="levenshtein">Levenshtein (Edit)</option>
+                    <option value="trigram">Trigram (Exact)</option>
+                </select>
+            </div>
+            <div style="flex: 1; min-width: 120px;">
+                <label style="margin-top: 0;">Corpus:</label>
+                <select id="vertSearchCorpus" style="width: 100%;">
+                    <option value="all" selected>All Composers</option>
+                    <option value="bach">J.S. Bach</option>
+                    <option value="beethoven">Beethoven</option>
+                    <option value="chopin">Chopin</option>
+                    <option value="mozart">Mozart</option>
+                    <option value="tchaikovsky">Tchaikovsky</option>
+                    <option value="handel">Handel</option>
+                </select>
+            </div>
+            <div style="flex: 1; min-width: 140px;">
+                <label style="margin-top: 0;">Playback Style:</label>
+                <select id="vertPlaybackStyle" style="width: 100%;">
+                    <option value="chord" selected>Block Chord (Simultaneous)</option>
+                    <option value="arpeggio">Arpeggio (Sequential)</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 140px;">
+                <label style="margin-top: 0;">Search Mode:</label>
+                <select id="vertSearchMode" style="width: 100%;">
+                    <option value="exact_vertical">Exact Chord Pitch</option>
+                    <option value="relative_vertical" selected>Sounds Like This (Transposition-Invariant)</option>
+                </select>
+            </div>
+            <!-- Keep your other vertical dropdowns here... -->
+            <div style="flex: 1; min-width: 120px;">
+                <label style="margin-top: 0;">Instrument:</label>
+                <select id="vertSearchInstrument" style="width: 100%;">
+                    <option value="piano" selected>Piano</option>
+                    <option value="harpsichord">Harpsichord</option>
+                    <option value="violin">Strings</option>
+                    <option value="organ">Pipe Organ</option>
+                </select>
+            </div>
+            <div style="flex: 1; min-width: 80px;">
+                <label style="margin-top: 0;">Max Dist:</label>
+                <input type="number" id="vertMaxDistance" value="5" min="0" max="20" style="width: 100%;">
+            </div>
+            <div style="flex: 1; min-width: 80px;">
+                <label style="margin-top: 0;">Max Results:</label>
+                <input type="number" id="vertMaxResults" value="5" min="1" max="50" style="width: 100%;">
+            </div>
+        </div>
+
+        <label>Query Chord (Bottom to Top, e.g., C3, E3, G3, C4):</label>
+        <input type="text" id="vertQuery" value="C3, E3, G3, C4">
+        
+        <button id="vertSearchBtn">Search Harmonies</button>
+        <div id="vertSearchStatus" class="status"></div>
+        <div id="vertVisualSearchResults" style="margin-top: 20px;"></div>
     </div>
 
     <script>
@@ -347,7 +424,9 @@
                         algorithm: document.getElementById('searchAlgo').value,
                         composer: document.getElementById('searchCorpus').value,
                         max_distance: parseInt(document.getElementById('maxDistance').value),
-                        instrument_name: document.getElementById('searchInstrument').value
+                        instrument_name: document.getElementById('searchInstrument').value,
+                        search_mode: document.getElementById('searchMode').value,
+                        max_results: parseInt(document.getElementById('maxResults').value)
                     })
                 });
 
@@ -368,6 +447,71 @@
                     card.className = "match-card";
                     const visId = `searchVis_${index}`;
                     const playerId = `searchPlayer_${index}`;
+
+                    card.innerHTML = `
+                        <h4>Match #${index + 1}: ${match.title}</h4>
+                        <div class="match-meta">
+                            <strong>Composer:</strong> ${match.composer} | 
+                            <strong>Score:</strong> ${match.score}
+                        </div>
+                        <midi-visualizer type="staff" id="${visId}" src="${match.midi_url}"></midi-visualizer>
+                        <midi-player id="${playerId}" visualizer="#${visId}" sound-font src="${match.midi_url}"></midi-player>
+                    `;
+                    resultsContainer.appendChild(card);
+                });
+
+            } catch (error) {
+                status.innerText = "Error: " + error.message;
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        // --- 4. VERTICAL SEARCH LOGIC ---
+        document.getElementById('vertSearchBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('vertSearchBtn');
+            const status = document.getElementById('vertSearchStatus');
+            const resultsContainer = document.getElementById('vertVisualSearchResults');
+            const rawChord = document.getElementById('vertQuery').value;
+            const chordArray = rawChord.split(',').map(n => n.trim()).filter(n => n.length > 0);
+            
+            btn.disabled = true;
+            status.innerText = "Searching corpora for harmonic matches...";
+            resultsContainer.innerHTML = ""; 
+
+            try {
+                const response = await fetch('/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        melody: chordArray, 
+                        algorithm: document.getElementById('vertSearchAlgo').value,
+                        composer: document.getElementById('vertSearchCorpus').value,
+                        max_distance: parseInt(document.getElementById('vertMaxDistance').value),
+                        instrument_name: document.getElementById('vertSearchInstrument').value,
+                        search_mode: document.getElementById('vertSearchMode').value, 
+                        max_results: parseInt(document.getElementById('vertMaxResults').value),
+                        playback_style: document.getElementById('vertPlaybackStyle').value
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (!response.ok) throw new Error(data.detail || "Search query failed.");
+
+                const matches = data.matches || [];
+                status.innerText = `Found ${matches.length} score match(es) using ${data.algorithm.toUpperCase()}.`;
+
+                if (matches.length === 0) {
+                    resultsContainer.innerHTML = `<p style="text-align: center; color: #64748b;">No matching harmonies found within the specified distance limit.</p>`;
+                    return;
+                }
+
+                matches.forEach((match, index) => {
+                    const card = document.createElement('div');
+                    card.className = "match-card";
+                    const visId = `vertSearchVis_${index}`;
+                    const playerId = `vertSearchPlayer_${index}`;
 
                     card.innerHTML = `
                         <h4>Match #${index + 1}: ${match.title}</h4>
