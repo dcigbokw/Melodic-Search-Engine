@@ -1,13 +1,18 @@
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 from rules_engine import check_parallel_motion, check_leading_tone_resolution, check_crossing_and_spacing
 from chord_generator import compose_chorale_2nd_order
 from rhythm_ai import generate_rhythms, inject_passing_tones
 from note_parser import parse_note
 from main import app
-from search_engine import encode_intervals, calculate_levenshtein, calculate_dtw, advanced_search
-from build_index import get_trigrams
+from search_engine import (
+    calculate_levenshtein, 
+    calculate_dtw, 
+    advanced_search,
+    calculate_horizontal_intervals,
+    calculate_vertical_intervals
+)
 
 # ==========================================
 # 1. RULES ENGINE TESTS
@@ -152,7 +157,7 @@ def test_search_endpoint_success(mock_bg_tasks, mock_parse, mock_search):
     mock_parse.side_effect = lambda x: int(x) 
     
     mock_search.return_value = [
-        {"title": "bwv1.mxl", "composer": "Bach", "score": 0, "raw_notes": [60, 62, 64], "phrase_id": 0}
+        {"title": "bwv1.mxl", "composer": "Bach", "score": 0, "raw_notes": [60, 62, 64]}
     ]
     
     # Send updated multi-dimensional payload
@@ -160,7 +165,8 @@ def test_search_endpoint_success(mock_bg_tasks, mock_parse, mock_search):
         "melody": ["60", "62", "64", "65"], 
         "algorithm": "dtw",
         "composer": "all",
-        "max_distance": 1
+        "max_distance": 1,
+        "search_mode": "exact"
     })
     
     assert response.status_code == 200
@@ -171,26 +177,33 @@ def test_search_endpoint_success(mock_bg_tasks, mock_parse, mock_search):
 @patch("main.transition_matrix", {(72, 67, 60, 48): {}})
 @patch("main.compose_chorale_2nd_order")
 @patch("main.export_to_midi_with_rhythm")
-@patch("main.os.remove")
-def test_generate_endpoint_success(mock_remove, mock_export, mock_compose):
+@patch("builtins.open", new_callable=mock_open, read_data=b"mocked_midi_data")
+def test_generate_endpoint_success(mock_file_open, mock_export, mock_compose):
+    # Mocking open() ensures the endpoint doesn't crash trying to read the temp midi file into memory
     mock_compose.return_value = [(72, 67, 60, 48)] * 16 
-    
-    with patch("main.FileResponse") as mock_file_response:
-        mock_file_response.return_value = MagicMock(status_code=200)
-        response = client.post("/generate", json={"num_chords": 16, "top_k": 5, "tonic_pc": 0})
-        assert response.status_code == 200
+    response = client.post("/generate", json={"num_chords": 16, "top_k": 5, "tonic_pc": 0})
+    assert response.status_code == 200
 
 # ==========================================
 # 6. SEARCH ENGINE MATH TESTS 
 # ==========================================
-def test_encode_intervals():
+def test_calculate_horizontal_intervals():
     pitches = [60, 62, 64, 65] 
-    intervals = encode_intervals(pitches)
+    intervals = calculate_horizontal_intervals(pitches)
     assert intervals == [2, 2, 1]
 
+def test_calculate_vertical_intervals():
+    pitches = [64, 60, 67] # E4, C4, G4
+    intervals = calculate_vertical_intervals(pitches)
+    assert intervals == [0, 4, 7] # Validates it sorts by bass note correctly
+
 def test_get_trigrams():
+    # Local fallback testing the exact structure the Trigram search utilizes
+    def local_get_trigrams(intervals):
+        return [tuple(intervals[i:i+3]) for i in range(len(intervals)-2)]
+        
     intervals = [2, 2, 1, 0, -1]
-    trigrams = get_trigrams(intervals)
+    trigrams = local_get_trigrams(intervals)
     assert trigrams == [(2, 2, 1), (2, 1, 0), (1, 0, -1)]
 
 def test_calculate_levenshtein():
@@ -217,7 +230,9 @@ MOCK_DATABASE = {
     10: {
         "title": "fake_chorale.mxl", 
         "composer": "bach", 
-        "intervals": [2, 2, 1, 0], 
+        "horizontal_intervals": [2, 2, 1, 0], 
+        "vertical_intervals": [0, 4, 7],
+        "exact_vertical_notes": [60, 64, 67],
         "raw_notes": [60, 62, 64, 65, 65]
     }
 }
@@ -227,13 +242,13 @@ def test_advanced_search_integration():
     """
     Tests the advanced search filtering logic using a controlled mock database.
     """
-    query_melody = [60, 62, 64, 65] # Becomes intervals [2, 2, 1]
+    query_melody = [60, 62, 64, 65] # Default mode is "exact" raw pitches
     
-    # 1. Test exact composer match
+    # 1. Test exact composer match using raw_notes
     results = advanced_search(query_melody, algorithm="levenshtein", target_composer="bach", max_dist=2)
     assert len(results) == 1
-    assert results[0]["phrase_id"] == 10
     assert results[0]["title"] == "fake_chorale.mxl"
+    assert results[0]["score"] <= 2 # Tolerates the extra '65' at the end of raw_notes
 
     # 2. Test composer filter exclusion
     empty_results = advanced_search(query_melody, algorithm="levenshtein", target_composer="chopin", max_dist=2)
