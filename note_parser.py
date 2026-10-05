@@ -5,31 +5,32 @@ SHARP_CHARS = {"#", "♯", "s"}
 FLAT_CHARS = {"b", "♭", "f"}
 
 def parse_note(token: str) -> int:
-    """
-    Accepts either a raw MIDI integer ("60") or scientific pitch notation
-    ("C4", "F#4", "Bb3") and returns a MIDI note number.
-    Middle C (C4) = 60, matching the convention already used elsewhere
-    in this project (music21's default).
-    """
-    token = token.strip()
+    token = str(token).strip()
     if not token:
         raise ValueError("Empty note token.")
+
+    # Gracefully handle rests
+    if token.lower() == "rest":
+        return -1
 
     if re.fullmatch(r"-?\d+", token):
         return int(token)
 
-    match = re.fullmatch(r"([A-Ga-g])([#♯sSbB♭fF]?)(-?\d+)", token)
+    match = re.search(r"([A-Ga-g])\s*([#♯sSbB♭fF]?)\s*(-?\d+)?", token)
+    
     if not match:
         raise ValueError(
-            f"Couldn't parse note '{token}'. Use a MIDI number (60) or "
-            f"scientific pitch notation like C4, F#4, or Bb3."
+            f"Couldn't parse note '{token}'. Use a MIDI number (60), "
+            f"scientific pitch notation (C4, Bb3), or type 'rest'."
         )
 
-    letter, accidental, octave = match.groups()
+    letter, accidental, octave_str = match.groups()
     pitch_class = NOTE_TO_PC[letter.upper()]
+    
     if accidental.lower() in SHARP_CHARS:
         pitch_class += 1
     elif accidental.lower() in FLAT_CHARS:
         pitch_class -= 1
 
-    return (int(octave) + 1) * 12 + pitch_class
+    octave = int(octave_str) if octave_str else 4
+    return (octave + 1) * 12 + pitch_class

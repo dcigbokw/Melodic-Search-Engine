@@ -22,13 +22,11 @@ try:
 except FileNotFoundError:
     print(f"WARNING: {MATRIX_FILE} not found. (Safe to ignore if running mock tests!)")
 
-
 def is_valid_transition(chord_a, chord_b, tonic_pc=0):
     """
     Acts as the Evaluator. Takes two full chords and ensures moving 
     between them doesn't break your Phase 2 counterpoint rules.
     """
-
     if not check_crossing_and_spacing(chord_b[0], chord_b[1], chord_b[2],chord_b[3]):
         return False
     
@@ -38,14 +36,61 @@ def is_valid_transition(chord_a, chord_b, tonic_pc=0):
             return False
             
     # 2. Check Parallel Motion for all 6 possible pairs of voices
-    # Pairs: (0,1), (0,2), (0,3), (1,2), (1,3), (2,3)
     for i in range(4):
         for j in range(i + 1, 4):
             if not check_parallel_motion(chord_a[i], chord_b[i], chord_a[j], chord_b[j]):
                 return False
-
                 
     return True
+
+# ==========================================
+# FUZZY FALLBACK LOGIC
+# ==========================================
+def get_fuzzy_fallback_candidates(current_chord):
+    """
+    If an exact 4-note chord is missing from the dataset (e.g., heavy flats/sharps),
+    find candidates by matching the outer voices or just the melody.
+    """
+    candidates = {}
+    
+    # Fallback Level 1: Match Outer Voices (Soprano and Bass)
+    for known_chord, transitions in transition_matrix.items():
+        if known_chord[0] == current_chord[0] and known_chord[3] == current_chord[3]:
+            for next_chord, prob in transitions.items():
+                candidates[next_chord] = candidates.get(next_chord, 0) + prob
+                
+    # Fallback Level 2: Match Soprano (Melody) only if Outer Voices fail
+    if not candidates:
+        for known_chord, transitions in transition_matrix.items():
+            if known_chord[0] == current_chord[0]:
+                for next_chord, prob in transitions.items():
+                    candidates[next_chord] = candidates.get(next_chord, 0) + prob
+                    
+    return candidates
+
+def get_next_candidates(current_state, top_k=8):
+    """Retrieves the most likely next chords, utilizing N-order logic and fuzzy fallbacks."""
+    # Try 2nd-order exact match first
+    if len(current_state) == 2:
+        if current_state in transition_matrix_2nd_order:
+            candidates = transition_matrix_2nd_order[current_state]
+            return sorted(candidates.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        current_chord = current_state[1]
+    else:
+        current_chord = current_state[0]
+
+    # Try 1st-order exact match
+    if current_chord in transition_matrix:
+        candidates = transition_matrix[current_chord]
+        return sorted(candidates.items(), key=lambda x: x[1], reverse=True)[:top_k]
+
+    # Engage Fuzzy Fallback if exact match fails
+    fuzzy_candidates = get_fuzzy_fallback_candidates(current_chord)
+    if fuzzy_candidates:
+        return sorted(fuzzy_candidates.items(), key=lambda x: x[1], reverse=True)[:top_k]
+
+    # Total failure
+    return []
 
 # ==========================================
 # THE RECURSIVE ENGINE (DFS Backtracking)
@@ -71,18 +116,21 @@ def compose_recursive(song, num_chords, top_k, tonic_pc=0, state=None):
     # Figure out our context (the last two chords)
     current_state = (song[-2], song[-1])
     
-    if current_state not in transition_matrix_2nd_order:
+    # Retrieve candidates smoothly scaling from 2nd order down to fuzzy matches
+    top_k_predictions = get_next_candidates(current_state, top_k)
+    
+    if not top_k_predictions:
         state["retries"] += 1
         return None
-        
-    raw_predictions = transition_matrix_2nd_order[current_state]
-    sorted_predictions = sorted(raw_predictions.items(), key=lambda x: x[1], reverse=True)
-    top_k_predictions = sorted_predictions[:top_k]
     
     valid_options = []
     for cand_chord, prob in top_k_predictions:
         if is_valid_transition(song[-1], cand_chord, tonic_pc):
             valid_options.append(cand_chord)
+            
+    # If strict rules reject everything, force a fuzzy connection rather than freezing
+    if not valid_options and top_k_predictions:
+        valid_options = [top_k_predictions[0][0]]
             
     random.shuffle(valid_options)
     
@@ -118,21 +166,21 @@ def compose_chorale_2nd_order(start_chord, num_chords=16, top_k=8, tonic_pc=None
     if tonic_pc is None:
         tonic_pc = start_chord[3] % 12
 
-    if start_chord not in transition_matrix:
-        print(f"Error: Start chord {start_chord} not found in 1st-Order matrix.")
+    # Engage fuzzy logic on the start chord as well!
+    top_k_predictions = get_next_candidates((start_chord,), top_k)
+    
+    if not top_k_predictions:
+        print(f"Error: Start chord {start_chord} yielded no candidates even with fuzzy fallback.")
         return [start_chord]
 
-    predictions = transition_matrix[start_chord]
-    
     # 1. Gather all valid candidates for Chord 2
     valid_candidates = []
-    for cand_chord, prob in predictions.items():
+    for cand_chord, prob in top_k_predictions:
         if is_valid_transition(start_chord, cand_chord, tonic_pc):
             valid_candidates.append((cand_chord, prob))
             
     if not valid_candidates:
-        print("Error: No valid second chords found that satisfy counterpoint rules.")
-        return [start_chord]
+        valid_candidates = [top_k_predictions[0]] # Fallback safety
         
     # Sort candidates by probability (highest first)
     valid_candidates.sort(key=lambda x: x[1], reverse=True)
@@ -154,9 +202,6 @@ def compose_chorale_2nd_order(start_chord, num_chords=16, top_k=8, tonic_pc=None
         if final_song is not None:
             return final_song  # Full song successfully generated!
             
-        # If we reach here, this specific Chord 2 was a harmonic dead end.
-        # The loop will automatically try the next Chord 2 candidate!
-
     print("\nCritical Failure: Exhausted all Chord 2 candidates without finishing.")
     return [start_chord]
 
