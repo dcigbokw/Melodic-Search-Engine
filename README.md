@@ -29,7 +29,7 @@ It is deployed as a REST API and demonstrates scalable system design, algorithmi
 * **Simultaneous SATB Playback Rendering:** The `/search` endpoint compiles vertical matches into single 4-voice block chords (capped at 4 notes) for simultaneous Tone.js playback.
 * **Selectable Playback Style:** A UI toggle to render vertical harmonic matches as either a simultaneous block chord or a sequential arpeggio.
 
-### 3. Controllable Generation System & Constraints (Phase 12)
+### 3. Controllable Generation System & Constraints 
 
 * **Constraint-Guided Co-Creation & Pre-Flight Auditing:** The `/extend` endpoint was refactored so the AI generates candidates, passes them through strict DFS rules, prunes invalid ones, and dynamically evaluates/rejects invalid human edits before generating.
 * **Strict Error Handling:** No silent failures. Specific HTTP 400/500 errors are raised (e.g., `"Invalid note: H4"` or `"Rule violation"`).
