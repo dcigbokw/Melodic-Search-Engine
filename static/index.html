@@ -91,6 +91,15 @@
                 </select>
             </div>
             
+            <div style="flex: 1; min-width: 100px;">
+                <label style="margin-top: 0;">Meter:</label>
+                <select id="genTimeSig" style="width: 100%;">
+                    <option value="4/4" selected>4/4 (Common)</option>
+                    <option value="3/4">3/4 (Waltz)</option>
+                    <option value="6/8">6/8 (Compound)</option>
+                </select>
+            </div>
+
             <div style="flex: 1; min-width: 80px;">
                 <label style="margin-top: 0;">Chords:</label>
                 <input type="number" id="numChords" value="16" min="4" max="64" style="width: 100%;">
@@ -191,7 +200,7 @@
             </div>
 
            <div style="flex: 1; display: flex; flex-direction: column; gap: 15px; min-width: 150px;">
-                <!-- NEW: AI Generative Parameters -->
+                <!-- AI Generative Parameters -->
                 <div>
                     <label style="margin-top: 0; font-size: 0.8rem;">Markov Depth (N-Order):</label>
                     <div style="display: flex; align-items: center; gap: 10px;">
@@ -210,7 +219,6 @@
                     <small style="font-size: 0.65rem; color: #64748b;">Softmax scaling for probability</small>
                 </div>
 
-                <!-- NEW: Note Range Slider -->
                 <div>
                     <label style="margin-top: 0; font-size: 0.8rem;">Vocal Range Expansion:</label>
                     <div style="display: flex; align-items: center; gap: 10px;">
@@ -220,7 +228,6 @@
                     <small style="font-size: 0.65rem; color: #64748b;">Expand strict classical tessitura (semitones)</small>
                 </div>
                 
-                <!-- NEW: Target Key Dropdown -->
                 <div>
                     <label style="margin-top: 0; font-size: 0.8rem;">Target Key (Tonic):</label>
                     <select id="keySelect" style="width: 100%; font-size: 0.85rem;">
@@ -257,12 +264,25 @@
                         <option value="forte">Forte (Loud)</option>
                     </select>
                 </div>
+
+                <div style="flex: 1; min-width: 100px;">
+                <label style="margin-top: 0;">Initial Meter:</label>
+                <select id="timeSig" style="width: 100%;">
+                    <option value="4/4" selected>4/4 (Common)</option>
+                    <option value="3/4">3/4 (Waltz)</option>
+                    <option value="6/8">6/8 (Compound)</option>
+                </select>
+            </div>
             </div>
         </div>
 
         <label>Progression Builder:</label>
         <div id="chordWorkspace" style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 15px; background: #f1f5f9; border-radius: 6px; border: 1px solid #cbd5e1;"></div>
-        <button id="addChordBtn" style="width: auto; background: #64748b; margin-top: 10px; margin-bottom: 20px;">+ Add SATB Block</button>
+        
+        <div style="display: flex; gap: 10px; margin-top: 10px; margin-bottom: 20px;">
+            <button id="addChordBtn" style="width: auto; background: #64748b; margin-top: 0;">+ Add SATB Block</button>
+            <button id="addMeterBtn" style="width: auto; background: #8b5cf6; margin-top: 0;">+ Add Meter Change</button>
+        </div>
 
         <label>Blocks for AI to add:</label>
         <input type="number" id="numToAdd" value="4" min="1" max="16" style="width: 100%;"/>
@@ -456,11 +476,10 @@
                         composer: document.getElementById('genComposer').value,
                         tonic_pc: parseInt(document.getElementById('genKeySelect').value),
                         tempo: document.getElementById('genTempo').value,
-                        dynamics: document.getElementById('genDynamics').value
+                        dynamics: document.getElementById('genDynamics').value,
+                        time_signature: document.getElementById('genTimeSig').value
                     })
                 });
-                
-                // The rogue "}" was right here and has been removed.
 
                 if (!response.ok) throw new Error("Generation failed.");
                 const blob = await response.blob();
@@ -477,11 +496,14 @@
                 btn.disabled = false;
             }
         });
+
         // --- 2. CO-CREATIVE WORKSPACE LOGIC (SATB) ---
         const chordWorkspace = document.getElementById('chordWorkspace');
 
-        function createSATBSlot(s = 'C5', a = 'G4', t = 'E4', b = 'C3') {
+        // NEW: Now accepts an explicit duration parameter and renders a beat input
+        function createSATBSlot(s = 'C5', a = 'G4', t = 'E4', b = 'C3', dur = 1.0) {
             const slot = document.createElement('div');
+            slot.className = 'chord-slot';
             slot.style.cssText = "display: flex; flex-direction: column; gap: 4px; background: white; padding: 10px; border-radius: 6px; border: 1px solid #cbd5e1; align-items: center; width: 80px;";
             
             const inputStyle = "width: 100%; padding: 4px; text-align: center; font-weight: bold; font-size: 0.85rem; border: 1px solid #e2e8f0; border-radius: 4px; box-sizing: border-box;";
@@ -491,36 +513,64 @@
             let tInput = `<input type="text" class="voice-t" value="${t}" style="${inputStyle}" title="Tenor">`;
             let bInput = `<input type="text" class="voice-b" value="${b}" style="${inputStyle}" title="Bass">`;
             
+            let durInput = `<input type="number" class="voice-dur" value="${dur}" step="0.25" min="0.25" max="8" style="${inputStyle} background: #f1f5f9;" title="Duration (Beats)">`;
             let deleteBtn = `<button onclick="this.parentElement.remove()" style="margin-top: 5px; padding: 2px; width: 100%; background: #ef4444; font-size: 0.75rem;">Delete</button>`;
             
-            slot.innerHTML = `<span style="font-size: 0.7rem; color: #64748b; margin-bottom: 2px;">SATB</span>` + sInput + aInput + tInput + bInput + deleteBtn;
+            slot.innerHTML = `<span style="font-size: 0.7rem; color: #64748b; margin-bottom: 2px; text-align: center;">SATB<br>Beats</span>` + sInput + aInput + tInput + bInput + durInput + deleteBtn;
             chordWorkspace.appendChild(slot);
         }
 
-        createSATBSlot('C5', 'G4', 'E4', 'C3');
-        createSATBSlot('B4', 'G4', 'D4', 'G2');
-        
-        document.getElementById('addChordBtn').addEventListener('click', () => createSATBSlot('rest', 'rest', 'rest', 'rest'));
-
-        function renderChordsToWorkspace(satbArrays) {
-            chordWorkspace.innerHTML = ""; 
-            satbArrays.forEach(voices => {
-                createSATBSlot(voices[0], voices[1], voices[2], voices[3]);
-            });
+        function createMeterSlot() {
+            const slot = document.createElement('div');
+            slot.className = 'meter-slot';
+            slot.style.cssText = "display: flex; flex-direction: column; gap: 4px; background: #ede9fe; padding: 10px; border-radius: 6px; border: 1px dashed #8b5cf6; align-items: center; justify-content: center; width: 80px;";
+            
+            let selectHtml = `
+                <select class="meter-val" style="width: 100%; padding: 4px; text-align: center; font-weight: bold; font-size: 0.85rem;">
+                    <option value="4/4">4/4</option>
+                    <option value="3/4">3/4</option>
+                    <option value="6/8">6/8</option>
+                    <option value="2/4">2/4</option>
+                </select>`;
+            let deleteBtn = `<button onclick="this.parentElement.remove()" style="margin-top: 5px; padding: 2px; width: 100%; background: #ef4444; font-size: 0.75rem;">Delete</button>`;
+            
+            slot.innerHTML = `<span style="font-size: 0.7rem; color: #6d28d9; margin-bottom: 2px;">METER</span>` + selectHtml + deleteBtn;
+            chordWorkspace.appendChild(slot);
         }
+
+        createSATBSlot('C5', 'G4', 'E4', 'C3', 1.0);
+        createSATBSlot('B4', 'G4', 'D4', 'G2', 1.0);
+        
+        document.getElementById('addChordBtn').addEventListener('click', () => createSATBSlot('rest', 'rest', 'rest', 'rest', 1.0));
+        document.getElementById('addMeterBtn').addEventListener('click', () => createMeterSlot());
 
         document.getElementById('extendBtn').addEventListener('click', async () => {
             const btn = document.getElementById('extendBtn');
             const status = document.getElementById('extendStatus');
             const container = document.getElementById('collab-player-container');
             
-            const currentChords = Array.from(chordWorkspace.children).map(slot => {
-                return [
-                    slot.querySelector('.voice-s').value.trim(),
-                    slot.querySelector('.voice-a').value.trim(),
-                    slot.querySelector('.voice-t').value.trim(),
-                    slot.querySelector('.voice-b').value.trim()
-                ];
+            const currentChords = [];
+            const currentDurations = [];
+            const meterChanges = {};
+            let chordCounter = 0;
+            
+            Array.from(chordWorkspace.children).forEach(slot => {
+                if (slot.classList.contains('meter-slot')) {
+                    meterChanges[chordCounter] = slot.querySelector('.meter-val').value;
+                } else if (slot.classList.contains('chord-slot')) {
+                    currentChords.push([
+                        slot.querySelector('.voice-s').value.trim(),
+                        slot.querySelector('.voice-a').value.trim(),
+                        slot.querySelector('.voice-t').value.trim(),
+                        slot.querySelector('.voice-b').value.trim()
+                    ]);
+                    
+                    let durVal = parseFloat(slot.querySelector('.voice-dur').value);
+                    if (isNaN(durVal)) durVal = 1.0;
+                    currentDurations.push(durVal);
+                    
+                    chordCounter++;
+                }
             });
             
             btn.disabled = true;
@@ -532,6 +582,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         current_chords: currentChords, 
+                        current_durations: currentDurations,
                         num_to_add: parseInt(document.getElementById('numToAdd').value),
                         composer_weights: {
                             bach: parseInt(document.getElementById('w-bach').value),
@@ -555,7 +606,9 @@
                         temperature: parseInt(document.getElementById('aiTemperature').value) / 10.0,
                         cadence_pref: document.getElementById('cadenceSelect').value,
                         range_expansion: parseInt(document.getElementById('rangeExpansion').value),
-                        tonic_pc: parseInt(document.getElementById('keySelect').value)
+                        tonic_pc: parseInt(document.getElementById('keySelect').value),
+                        time_signature: document.getElementById('timeSig').value,
+                        meter_changes: meterChanges
                     })
                 });
 
@@ -564,10 +617,22 @@
                     throw new Error(errData.detail || "API Error.");
                 }
 
+                // NEW: We parse the generated headers and append them to the existing UI blocks, keeping meters safe!
                 const generatedChordsHeader = response.headers.get("X-Generated-Chords");
+                const generatedRhythmsHeader = response.headers.get("X-Generated-Rhythms");
+                
                 if (generatedChordsHeader) {
                     const parsedChords = JSON.parse(generatedChordsHeader);
-                    renderChordsToWorkspace(parsedChords);
+                    let parsedRhythms = [];
+                    if (generatedRhythmsHeader) {
+                        parsedRhythms = JSON.parse(generatedRhythmsHeader);
+                    } else {
+                        parsedRhythms = Array(parsedChords.length).fill(1.0);
+                    }
+                    
+                    parsedChords.forEach((voices, idx) => {
+                        createSATBSlot(voices[0], voices[1], voices[2], voices[3], parsedRhythms[idx]);
+                    });
                 }
 
                 const blob = await response.blob();
@@ -716,3 +781,4 @@
     </script>
 </body>
 </html>
+```<FollowUp>

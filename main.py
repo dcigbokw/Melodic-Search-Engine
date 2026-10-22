@@ -21,7 +21,7 @@ from rhythm_ai import (
     train_rhythm_model,
     transition_matrix_rhythm
 )
-from music21 import chord, tempo, stream, midi, pitch, note, instrument
+from music21 import chord, tempo, stream, midi, pitch, note, instrument, meter
 
 app = FastAPI(
     title="Bach Generative AI & Search API",
@@ -51,19 +51,38 @@ async def delayed_cleanup(filepath: str, delay: int = 15):
 # ==========================================
 # 1. THE GENERATOR ENDPOINT
 # ==========================================
-# ==========================================
-# 1. THE GENERATOR ENDPOINT
-# ==========================================
 class GenerateRequest(BaseModel):
     num_chords: int = 16
     composer: str = "bach"
     tonic_pc: int = 0
     tempo: str = "andante"
     dynamics: str = "mf"
+    time_signature: str = "4/4"
+
+def interpolate_matrices(matrices_dict, user_weights, order_key="first_order"):
+    total_weight = sum(user_weights.values())
+    if total_weight <= 0:
+        return matrices_dict.get("bach", {}).get(order_key, {})
+        
+    normalized_weights = {k: v / total_weight for k, v in user_weights.items()}
+    blended_matrix = {}
+    
+    for composer, comp_weight in normalized_weights.items():
+        if comp_weight == 0: continue
+        matrix = matrices_dict.get(composer, {}).get(order_key, {})
+        for state, transitions in matrix.items():
+            if state not in blended_matrix:
+                blended_matrix[state] = {}
+            for next_state, prob in transitions.items():
+                weighted_prob = prob * comp_weight
+                if next_state not in blended_matrix[state]:
+                    blended_matrix[state][next_state] = 0.0
+                blended_matrix[state][next_state] += weighted_prob
+                
+    return blended_matrix
 
 @app.post("/generate")
 def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
-    # Route user selection to a 100% weight for the chosen composer
     comp_weights = {comp: 100 if comp == req.composer else 0 for comp in ['bach', 'beethoven', 'chopin', 'mozart', 'tchaikovsky', 'handel']}
     
     matrix_1st = interpolate_matrices(all_corpora, comp_weights, "first_order")
@@ -81,7 +100,6 @@ def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
     fallback_options = [c for c in matrix_1st.keys() if isinstance(c, tuple) and c[0] != -1]
     successful_drafts = []
     
-    # Background Parameters (Hidden from UI)
     markov_order = 2
     temperature = 1.0
     range_expansion = 0
@@ -168,22 +186,30 @@ def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
 
     s = stream.Score()
     p = stream.Part()
-    p.append(tempo.MetronomeMark(number=target_bpm))
+    p.insert(0.0, tempo.MetronomeMark(number=target_bpm))
+    p.insert(0.0, meter.TimeSignature(req.time_signature))
     
+    current_offset = 0.0
     for i, c_tuple in enumerate(polished_song):
         current_duration = polished_rhythms[i] if i < len(polished_rhythms) else 1.0
+        
         if all(n == -1 for n in c_tuple):
             r = chord.Rest()
             r.quarterLength = current_duration
-            p.append(r)
+            p.insert(current_offset, r)
         else:
             valid_pitches = [pitch.Pitch(midi=m) for m in c_tuple if m != -1]
             c_obj = chord.Chord(valid_pitches)
             c_obj.quarterLength = current_duration 
-            for n in c_obj.notes: n.volume.velocity = target_velocity
-            p.append(c_obj)
+            for n in c_obj.notes: 
+                n.volume.velocity = target_velocity
+            p.insert(current_offset, c_obj)
             
+        current_offset += current_duration
+            
+    p = p.makeMeasures()
     s.append(p)
+    
     temp_filename = f"static/generated_{uuid.uuid4().hex[:8]}.mid"
     mf = midi.translate.streamToMidiFile(s)
     mf.open(temp_filename, 'wb')
@@ -194,6 +220,7 @@ def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
     with open(temp_filename, "rb") as f:
         midi_data = f.read()
     return Response(content=midi_data, media_type="audio/midi")
+
 # ==========================================
 # 2. SATB TRANSLATOR HELPERS
 # ==========================================
@@ -227,41 +254,20 @@ def satb_to_midi_tuple(satb_list):
 # ==========================================
 class ExtendRequest(BaseModel):
     current_chords: List[List[str]]   
+    current_durations: List[float] = [] 
     num_to_add: int = 4
     composer_weights: dict = {"bach": 100, "beethoven": 0, "chopin": 0, "mozart": 0, "tchaikovsky": 0, "handel":0}
     rhythm_weights: dict = {"bach": 100, "beethoven": 0, "chopin": 0, "mozart": 0, "tchaikovsky": 0, "handel":0}
     tempo: str = "andante"
     dynamics: str = "mf"
     markov_order: int = 1
-    temperature: float = 1.0       # Softmax multiplier
-    range_expansion: int = 0       # Vocal tessitura expansion
-    cadence_pref: str = "none"     # Force V-I, I-V, etc.
-    tonic_pc: int = 0              # Key definition for cadences
+    temperature: float = 1.0
+    range_expansion: int = 0
+    cadence_pref: str = "none"
+    tonic_pc: int = 0
+    time_signature: str = "4/4"
+    meter_changes: dict = {}
 
-def interpolate_matrices(matrices_dict, user_weights, order_key="first_order"):
-    """Blends N-order Markov matrices based on UI sliders."""
-    total_weight = sum(user_weights.values())
-    if total_weight <= 0:
-        return matrices_dict.get("bach", {}).get(order_key, {})
-        
-    normalized_weights = {k: v / total_weight for k, v in user_weights.items()}
-    blended_matrix = {}
-    
-    for composer, comp_weight in normalized_weights.items():
-        if comp_weight == 0: continue
-        matrix = matrices_dict.get(composer, {}).get(order_key, {})
-        for state, transitions in matrix.items():
-            if state not in blended_matrix:
-                blended_matrix[state] = {}
-            for next_state, prob in transitions.items():
-                weighted_prob = prob * comp_weight
-                if next_state not in blended_matrix[state]:
-                    blended_matrix[state][next_state] = 0.0
-                blended_matrix[state][next_state] += weighted_prob
-                
-    return blended_matrix
-
-@app.post("/extend")
 @app.post("/extend")
 def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
     matrix_1st = interpolate_matrices(all_corpora, req.composer_weights, "first_order")
@@ -275,6 +281,9 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="Provide at least 1 SATB block.")
 
     human_sequence = [satb_to_midi_tuple(block) for block in req.current_chords]
+    
+    # NEW: Maintain the user's manual rhythms
+    human_rhythms = req.current_durations if len(req.current_durations) == len(human_sequence) else [1.0] * len(human_sequence)
     
     is_clean, error_msg = audit_human_sequence(human_sequence, is_valid_transition)
     if not is_clean:
@@ -290,17 +299,15 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
         if len(successful_drafts) >= 5:
             return
             
-        # We now calculate depth based on AI additions, since 'path' contains the full history
         current_depth = len(path) - len(human_sequence) 
         
         if current_depth == req.num_to_add:
-            successful_drafts.append(path.copy()) # Must copy the path!
+            successful_drafts.append(path.copy())
             return
         
         opts_dict = {}
         target_order = req.markov_order
         
-        # KATZ BACKOFF: Try highest requested order first, back off if matrix is sparse
         while target_order >= 1 and not opts_dict:
             if target_order == 3 and len(path) >= 3:
                 state = (path[-3], path[-2], path[-1])
@@ -324,9 +331,8 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
         
         for cand in opts:
             cand_state = cand[-1] if isinstance(cand, tuple) and isinstance(cand[0], tuple) else cand
-            curr_state = path[-1] # Compare to the immediate previous chord
+            curr_state = path[-1]
             
-            # Note Range limit check
             out_of_range = False
             if cand_state[0] != -1:
                 for v in range(4):
@@ -336,7 +342,6 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
                         break
             if out_of_range: continue
 
-            # Cadence Forcing
             if cand_state[0] != -1 and req.cadence_pref != "none":
                 is_penultimate = (current_depth == req.num_to_add - 1)
                 is_ultimate = (current_depth == req.num_to_add)
@@ -357,58 +362,63 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
                     continue
                 visited.add(h)
                 
-                # Append, Recurse, and Pop for N-Order tracking
                 path.append(cand_state)
                 dfs_extend(path, visited)
                 path.pop()
 
-    # Pass the full human sequence so higher orders can look backwards
     dfs_extend(human_sequence.copy(), set())
     
     if successful_drafts:
         best_draft = None
         highest_score = -9999
         for draft in successful_drafts:
-            draft_score = score_composition(draft, matrix_1st) # Score against 1st order probabilities
+            draft_score = score_composition(draft, matrix_1st)
             if draft_score > highest_score:
                 highest_score = draft_score
                 best_draft = draft
                 
-        # Strip the human sequence back out
         ai_extension = best_draft[len(human_sequence):] 
     else:
         ai_extension = [tuple(n + 4 if n != -1 else -1 for n in current_state)] * req.num_to_add
             
     full_song_tuples = human_sequence + ai_extension
-    full_song_strings = [midi_tuple_to_satb(c) for c in full_song_tuples]
+    
+    # NEW: Generate rhythms only for the newly added AI chords!
+    ai_rhythms = generate_rhythms(num_chords=len(ai_extension), rhythm_weights=req.rhythm_weights)
+    full_rhythms = human_rhythms + ai_rhythms
     
     tempo_map = {"adagio": 60, "andante": 90, "allegro": 130}
     velocity_map = {"piano": 40, "mf": 75, "forte": 110}
     target_bpm = tempo_map.get(req.tempo, 90)
     target_velocity = velocity_map.get(req.dynamics, 75)
 
-    human_rhythms = [1.0] * len(human_sequence)
-    ai_rhythms = generate_rhythms(num_chords=len(ai_extension), rhythm_weights=req.rhythm_weights)
-    full_rhythms = human_rhythms + ai_rhythms
-
     s = stream.Score()
     p = stream.Part()
-    p.append(tempo.MetronomeMark(number=target_bpm))
+    p.insert(0.0, tempo.MetronomeMark(number=target_bpm))
+    p.insert(0.0, meter.TimeSignature(req.time_signature)) 
     
+    current_offset = 0.0
     for i, c_tuple in enumerate(full_song_tuples):
-        current_duration = full_rhythms[i] 
+        if str(i) in req.meter_changes:
+            p.insert(current_offset, meter.TimeSignature(req.meter_changes[str(i)]))
+
+        current_duration = full_rhythms[i] if i < len(full_rhythms) else 1.0
+        
         if all(n == -1 for n in c_tuple):
             r = chord.Rest()
             r.quarterLength = current_duration
-            p.append(r)
+            p.insert(current_offset, r)
         else:
             valid_pitches = [pitch.Pitch(midi=m) for m in c_tuple if m != -1]
             c_obj = chord.Chord(valid_pitches)
             c_obj.quarterLength = current_duration 
             for n in c_obj.notes:
                 n.volume.velocity = target_velocity
-            p.append(c_obj)
+            p.insert(current_offset, c_obj)
+            
+        current_offset += current_duration
 
+    p = p.makeMeasures()
     s.append(p)
     
     temp_filename = f"static/collab_{uuid.uuid4().hex[:8]}.mid"
@@ -418,7 +428,13 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
     mf.close()
     
     background_tasks.add_task(delayed_cleanup, temp_filename, 15)
-    headers = {"X-Generated-Chords": json.dumps(full_song_strings)}
+    
+    # NEW: Return only the newly generated AI block so we can safely append it
+    ai_song_strings = [midi_tuple_to_satb(c) for c in ai_extension]
+    headers = {
+        "X-Generated-Chords": json.dumps(ai_song_strings),
+        "X-Generated-Rhythms": json.dumps(ai_rhythms)
+    }
     
     with open(temp_filename, "rb") as f:
         midi_data = f.read()
