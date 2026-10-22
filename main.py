@@ -8,10 +8,12 @@ import random
 import os
 import asyncio
 import uuid
+import math
 from chord_generator import compose_chorale_2nd_order, transition_matrix, all_corpora, is_valid_transition
-from search_engine import advanced_search
+from search_engine import advanced_search, calculate_dtw, calculate_levenshtein
 from note_parser import parse_note
 from rules_engine import audit_human_sequence
+from music_scorer import score_composition
 from rhythm_ai import (
     generate_rhythms, 
     inject_passing_tones, 
@@ -38,9 +40,6 @@ if not transition_matrix_rhythm:
     print("No rhythm matrix found in memory. Training model...")
     transition_matrix_rhythm.update(train_rhythm_model())
 
-# ==========================================
-# ASYNC CLEANUP UTILITY
-# ==========================================
 async def delayed_cleanup(filepath: str, delay: int = 15):
     await asyncio.sleep(delay)
     try:
@@ -52,60 +51,153 @@ async def delayed_cleanup(filepath: str, delay: int = 15):
 # ==========================================
 # 1. THE GENERATOR ENDPOINT
 # ==========================================
+# ==========================================
+# 1. THE GENERATOR ENDPOINT
+# ==========================================
 class GenerateRequest(BaseModel):
     num_chords: int = 16
-    top_k: int = 5
+    composer: str = "bach"
     tonic_pc: int = 0
+    tempo: str = "andante"
+    dynamics: str = "mf"
 
 @app.post("/generate")
 def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
-    if not transition_matrix:
-        raise HTTPException(status_code=500, detail="Matrix is empty or failed to load. Run train.py first.")
+    # Route user selection to a 100% weight for the chosen composer
+    comp_weights = {comp: 100 if comp == req.composer else 0 for comp in ['bach', 'beethoven', 'chopin', 'mozart', 'tchaikovsky', 'handel']}
+    
+    matrix_1st = interpolate_matrices(all_corpora, comp_weights, "first_order")
+    matrix_2nd = interpolate_matrices(all_corpora, comp_weights, "second_order")
+    matrix_3rd = interpolate_matrices(all_corpora, comp_weights, "third_order")
+    
+    if not matrix_1st:
+        raise HTTPException(status_code=500, detail="Matrix is empty. Run train.py first.")
         
-    tonic_pc = req.tonic_pc % 12
-    candidate_starts = [c for c in transition_matrix.keys() if c[3] % 12 == tonic_pc]
-
+    candidate_starts = [c for c in matrix_1st.keys() if isinstance(c, tuple) and len(c) == 4 and c[3] != -1 and c[3] % 12 == req.tonic_pc]
     if not candidate_starts:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No trained chords found with a bass note matching tonic_pc={tonic_pc}."
-        )
+        raise HTTPException(status_code=400, detail=f"No trained chords found matching tonic_pc={req.tonic_pc}.")
 
     start_chord = random.choice(candidate_starts)
-
-    for attempt in range(5):
-        song = compose_chorale_2nd_order(
-            start_chord, num_chords=req.num_chords, top_k=req.top_k, tonic_pc=tonic_pc
-        )
+    fallback_options = [c for c in matrix_1st.keys() if isinstance(c, tuple) and c[0] != -1]
+    successful_drafts = []
+    
+    # Background Parameters (Hidden from UI)
+    markov_order = 2
+    temperature = 1.0
+    range_expansion = 0
+    cadence_pref = "authentic"
+    RANGES = {0: (60, 81), 1: (53, 74), 2: (48, 69), 3: (40, 62)}
+    
+    def dfs_generate(path, visited):
+        if len(successful_drafts) >= 5: return
         
-        if len(song) == req.num_chords:
-            rhythms = generate_rhythms(num_chords=len(song))
-            polished_song, polished_rhythms = inject_passing_tones(song, rhythms, tonic_pc=tonic_pc)
+        current_depth = len(path) - 1
+        if current_depth == req.num_chords - 1:
+            successful_drafts.append(path.copy())
+            return
             
-            # Save to static directory
-            temp_filename = f"static/generated_{uuid.uuid4().hex[:8]}.mid"
-            export_to_midi_with_rhythm(polished_song, polished_rhythms, filename=temp_filename)
+        opts_dict = {}
+        target_order = markov_order
+        
+        while target_order >= 1 and not opts_dict:
+            if target_order == 3 and len(path) >= 3:
+                opts_dict = matrix_3rd.get((path[-3], path[-2], path[-1]), {})
+            elif target_order == 2 and len(path) >= 2:
+                opts_dict = matrix_2nd.get((path[-2], path[-1]), {})
+            elif target_order == 1:
+                opts_dict = matrix_1st.get(path[-1], {})
+            target_order -= 1
             
-            # Use delayed cleanup to avoid file locks
-            background_tasks.add_task(delayed_cleanup, temp_filename, 15)
+        valid_keys = [k for k in opts_dict.keys() if isinstance(k, tuple) and k[0] != -1]
+        opts = sorted(valid_keys, key=lambda k: math.log(random.random() + 1e-9) / (opts_dict[k] ** (1.0 / max(0.1, temperature))), reverse=True)
+        
+        if len(opts) < 5 and fallback_options:
+            opts.extend(random.sample(fallback_options, min(20, len(fallback_options))))
+        
+        for cand in opts:
+            cand_state = cand[-1] if isinstance(cand, tuple) and isinstance(cand[0], tuple) else cand
+            curr_state = path[-1]
             
-            # Buffer into memory and return Response
-            with open(temp_filename, "rb") as f:
-                midi_data = f.read()
-            return Response(content=midi_data, media_type="audio/midi")
-            
-    raise HTTPException(
-        status_code=500, 
-        detail=f"Engine hit a harmonic dead end 5 times in a row starting from {start_chord}."
-    )
+            out_of_range = False
+            if cand_state[0] != -1:
+                for v in range(4):
+                    min_pitch, max_pitch = RANGES[v]
+                    if not (min_pitch - range_expansion <= cand_state[v] <= max_pitch + range_expansion):
+                        out_of_range = True
+                        break
+            if out_of_range: continue
 
+            if cand_state[0] != -1 and cadence_pref != "none":
+                is_penultimate = (current_depth == req.num_chords - 2)
+                is_ultimate = (current_depth == req.num_chords - 1)
+                bass_pc = cand_state[3] % 12
+                
+                if cadence_pref == "authentic":
+                    if is_penultimate and bass_pc != (req.tonic_pc + 7) % 12: continue
+                    if is_ultimate and bass_pc != req.tonic_pc: continue
+            
+            if is_valid_transition(curr_state, cand_state, req.tonic_pc):
+                h = hash(tuple(path + [cand_state]))
+                if h in visited: continue
+                visited.add(h)
+                path.append(cand_state)
+                dfs_generate(path, visited)
+                path.pop()
+
+    dfs_generate([start_chord], set())
+    
+    if successful_drafts:
+        best_draft = None
+        highest_score = -9999
+        for draft in successful_drafts:
+            draft_score = score_composition(draft, matrix_1st)
+            if draft_score > highest_score:
+                highest_score = draft_score
+                best_draft = draft
+        song = best_draft
+    else:
+        raise HTTPException(status_code=500, detail="Engine failed to find a valid progression resolving to the target key.")
+
+    rhythms = generate_rhythms(num_chords=len(song), rhythm_weights=comp_weights)
+    polished_song, polished_rhythms = inject_passing_tones(song, rhythms, tonic_pc=req.tonic_pc)
+    
+    tempo_map = {"adagio": 60, "andante": 90, "allegro": 130}
+    velocity_map = {"piano": 40, "mf": 75, "forte": 110}
+    target_bpm = tempo_map.get(req.tempo, 90)
+    target_velocity = velocity_map.get(req.dynamics, 75)
+
+    s = stream.Score()
+    p = stream.Part()
+    p.append(tempo.MetronomeMark(number=target_bpm))
+    
+    for i, c_tuple in enumerate(polished_song):
+        current_duration = polished_rhythms[i] if i < len(polished_rhythms) else 1.0
+        if all(n == -1 for n in c_tuple):
+            r = chord.Rest()
+            r.quarterLength = current_duration
+            p.append(r)
+        else:
+            valid_pitches = [pitch.Pitch(midi=m) for m in c_tuple if m != -1]
+            c_obj = chord.Chord(valid_pitches)
+            c_obj.quarterLength = current_duration 
+            for n in c_obj.notes: n.volume.velocity = target_velocity
+            p.append(c_obj)
+            
+    s.append(p)
+    temp_filename = f"static/generated_{uuid.uuid4().hex[:8]}.mid"
+    mf = midi.translate.streamToMidiFile(s)
+    mf.open(temp_filename, 'wb')
+    mf.write()
+    mf.close()
+    
+    background_tasks.add_task(delayed_cleanup, temp_filename, 7)
+    with open(temp_filename, "rb") as f:
+        midi_data = f.read()
+    return Response(content=midi_data, media_type="audio/midi")
 # ==========================================
-# 2. SATB TRANSLATOR HELPERS (Co-Creative UI)
+# 2. SATB TRANSLATOR HELPERS
 # ==========================================
 def midi_tuple_to_satb(midi_tuple):
-    if midi_tuple[0] == -1:
-        return ["rest", "rest", "rest", "rest"]
-        
     satb_strings = []
     for midi_val in midi_tuple:
         if midi_val == -1:
@@ -131,32 +223,36 @@ def satb_to_midi_tuple(satb_list):
     return tuple(midi_vals)
 
 # ==========================================
-# 3. THE CO-CREATIVE EXTEND ENDPOINT (SATB)
+# 3. THE CO-CREATIVE EXTEND ENDPOINT
 # ==========================================
 class ExtendRequest(BaseModel):
     current_chords: List[List[str]]   
     num_to_add: int = 4
     composer_weights: dict = {"bach": 100, "beethoven": 0, "chopin": 0, "mozart": 0, "tchaikovsky": 0, "handel":0}
+    rhythm_weights: dict = {"bach": 100, "beethoven": 0, "chopin": 0, "mozart": 0, "tchaikovsky": 0, "handel":0}
     tempo: str = "andante"
     dynamics: str = "mf"
+    markov_order: int = 1
+    temperature: float = 1.0       # Softmax multiplier
+    range_expansion: int = 0       # Vocal tessitura expansion
+    cadence_pref: str = "none"     # Force V-I, I-V, etc.
+    tonic_pc: int = 0              # Key definition for cadences
 
-def interpolate_matrices(matrices_dict, user_weights):
+def interpolate_matrices(matrices_dict, user_weights, order_key="first_order"):
+    """Blends N-order Markov matrices based on UI sliders."""
     total_weight = sum(user_weights.values())
     if total_weight <= 0:
-        return matrices_dict.get("bach", {}).get("first_order", {})
+        return matrices_dict.get("bach", {}).get(order_key, {})
         
     normalized_weights = {k: v / total_weight for k, v in user_weights.items()}
     blended_matrix = {}
     
     for composer, comp_weight in normalized_weights.items():
-        if comp_weight == 0:
-            continue
-            
-        matrix = matrices_dict.get(composer, {}).get("first_order", {})
+        if comp_weight == 0: continue
+        matrix = matrices_dict.get(composer, {}).get(order_key, {})
         for state, transitions in matrix.items():
             if state not in blended_matrix:
                 blended_matrix[state] = {}
-            
             for next_state, prob in transitions.items():
                 weighted_prob = prob * comp_weight
                 if next_state not in blended_matrix[state]:
@@ -166,11 +262,14 @@ def interpolate_matrices(matrices_dict, user_weights):
     return blended_matrix
 
 @app.post("/extend")
+@app.post("/extend")
 def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
-    dynamic_matrix = interpolate_matrices(all_corpora, req.composer_weights)
+    matrix_1st = interpolate_matrices(all_corpora, req.composer_weights, "first_order")
+    matrix_2nd = interpolate_matrices(all_corpora, req.composer_weights, "second_order")
+    matrix_3rd = interpolate_matrices(all_corpora, req.composer_weights, "third_order")
     
-    if not dynamic_matrix:
-        raise HTTPException(status_code=500, detail="Matrix is empty.")
+    if not matrix_1st:
+        raise HTTPException(status_code=500, detail="Matrix is empty. Run train.py")
         
     if len(req.current_chords) < 1:
         raise HTTPException(status_code=400, detail="Provide at least 1 SATB block.")
@@ -181,67 +280,135 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
     if not is_clean:
         raise HTTPException(status_code=400, detail=error_msg)
     
-    valid_chords = [c for c in human_sequence if c[0] != -1]
-    if not valid_chords:
-        current_state = random.choice(list(dynamic_matrix.keys()))
-        if isinstance(current_state, tuple) and isinstance(current_state[0], tuple):
-            current_state = current_state[-1]
-    else:
-        current_state = valid_chords[-1] 
+    current_state = human_sequence[-1]
+    fallback_options = [c for c in matrix_1st.keys() if isinstance(c, tuple) and c[0] != -1]
+    successful_drafts = [] 
     
-    ai_extension = []
+    RANGES = {0: (60, 81), 1: (53, 74), 2: (48, 69), 3: (40, 62)}
     
-    for _ in range(req.num_to_add):
-        if current_state in dynamic_matrix:
-            next_options = dynamic_matrix[current_state]
-            choices = list(next_options.keys())
-            weights = list(next_options.values())
+    def dfs_extend(path, visited):
+        if len(successful_drafts) >= 5:
+            return
             
-            valid_next = None
-            for _ in range(10): 
-                candidate = random.choices(choices, weights=weights, k=1)[0]
-                if is_valid_transition(current_state, candidate):
-                    valid_next = candidate
-                    break
-            
-            if not valid_next:
-                valid_next = random.choices(choices, weights=weights, k=1)[0]
+        # We now calculate depth based on AI additions, since 'path' contains the full history
+        current_depth = len(path) - len(human_sequence) 
+        
+        if current_depth == req.num_to_add:
+            successful_drafts.append(path.copy()) # Must copy the path!
+            return
+        
+        opts_dict = {}
+        target_order = req.markov_order
+        
+        # KATZ BACKOFF: Try highest requested order first, back off if matrix is sparse
+        while target_order >= 1 and not opts_dict:
+            if target_order == 3 and len(path) >= 3:
+                state = (path[-3], path[-2], path[-1])
+                opts_dict = matrix_3rd.get(state, {})
+            elif target_order == 2 and len(path) >= 2:
+                state = (path[-2], path[-1])
+                opts_dict = matrix_2nd.get(state, {})
+            elif target_order == 1:
+                state = path[-1]
+                opts_dict = matrix_1st.get(state, {})
                 
-            ai_extension.append(valid_next)
-            current_state = valid_next
-        else:
-            next_chord = random.choice(list(dynamic_matrix.keys()))
-            if isinstance(next_chord, tuple) and isinstance(next_chord[0], tuple):
-                next_chord = next_chord[-1]
-            ai_extension.append(next_chord)
-            current_state = next_chord
+            target_order -= 1
+            
+        valid_keys = [k for k in opts_dict.keys() if isinstance(k, tuple) and k[0] != -1]
+        
+        temp = max(0.1, req.temperature)
+        opts = sorted(valid_keys, key=lambda k: math.log(random.random() + 1e-9) / (opts_dict[k] ** (1.0 / temp)), reverse=True)
+            
+        if len(opts) < 5 and fallback_options:
+            opts.extend(random.sample(fallback_options, min(20, len(fallback_options))))
+        
+        for cand in opts:
+            cand_state = cand[-1] if isinstance(cand, tuple) and isinstance(cand[0], tuple) else cand
+            curr_state = path[-1] # Compare to the immediate previous chord
+            
+            # Note Range limit check
+            out_of_range = False
+            if cand_state[0] != -1:
+                for v in range(4):
+                    min_pitch, max_pitch = RANGES[v]
+                    if not (min_pitch - req.range_expansion <= cand_state[v] <= max_pitch + req.range_expansion):
+                        out_of_range = True
+                        break
+            if out_of_range: continue
+
+            # Cadence Forcing
+            if cand_state[0] != -1 and req.cadence_pref != "none":
+                is_penultimate = (current_depth == req.num_to_add - 1)
+                is_ultimate = (current_depth == req.num_to_add)
+                bass_pc = cand_state[3] % 12
+                
+                if req.cadence_pref == "authentic":
+                    if is_penultimate and bass_pc != (req.tonic_pc + 7) % 12: continue 
+                    if is_ultimate and bass_pc != req.tonic_pc: continue 
+                elif req.cadence_pref == "half":
+                    if is_ultimate and bass_pc != (req.tonic_pc + 7) % 12: continue 
+                elif req.cadence_pref == "plagal":
+                    if is_penultimate and bass_pc != (req.tonic_pc + 5) % 12: continue 
+                    if is_ultimate and bass_pc != req.tonic_pc: continue 
+
+            if is_valid_transition(curr_state, cand_state, req.tonic_pc):
+                h = hash(tuple(path + [cand_state]))
+                if h in visited:
+                    continue
+                visited.add(h)
+                
+                # Append, Recurse, and Pop for N-Order tracking
+                path.append(cand_state)
+                dfs_extend(path, visited)
+                path.pop()
+
+    # Pass the full human sequence so higher orders can look backwards
+    dfs_extend(human_sequence.copy(), set())
+    
+    if successful_drafts:
+        best_draft = None
+        highest_score = -9999
+        for draft in successful_drafts:
+            draft_score = score_composition(draft, matrix_1st) # Score against 1st order probabilities
+            if draft_score > highest_score:
+                highest_score = draft_score
+                best_draft = draft
+                
+        # Strip the human sequence back out
+        ai_extension = best_draft[len(human_sequence):] 
+    else:
+        ai_extension = [tuple(n + 4 if n != -1 else -1 for n in current_state)] * req.num_to_add
             
     full_song_tuples = human_sequence + ai_extension
     full_song_strings = [midi_tuple_to_satb(c) for c in full_song_tuples]
     
     tempo_map = {"adagio": 60, "andante": 90, "allegro": 130}
     velocity_map = {"piano": 40, "mf": 75, "forte": 110}
-    
     target_bpm = tempo_map.get(req.tempo, 90)
     target_velocity = velocity_map.get(req.dynamics, 75)
-    
+
+    human_rhythms = [1.0] * len(human_sequence)
+    ai_rhythms = generate_rhythms(num_chords=len(ai_extension), rhythm_weights=req.rhythm_weights)
+    full_rhythms = human_rhythms + ai_rhythms
+
     s = stream.Score()
     p = stream.Part()
     p.append(tempo.MetronomeMark(number=target_bpm))
     
-    for c_tuple in full_song_tuples:
-        if c_tuple[0] == -1:
+    for i, c_tuple in enumerate(full_song_tuples):
+        current_duration = full_rhythms[i] 
+        if all(n == -1 for n in c_tuple):
             r = chord.Rest()
-            r.quarterLength = 1.0
+            r.quarterLength = current_duration
             p.append(r)
         else:
             valid_pitches = [pitch.Pitch(midi=m) for m in c_tuple if m != -1]
             c_obj = chord.Chord(valid_pitches)
-            c_obj.quarterLength = 1.0 
+            c_obj.quarterLength = current_duration 
             for n in c_obj.notes:
                 n.volume.velocity = target_velocity
             p.append(c_obj)
-        
+
     s.append(p)
     
     temp_filename = f"static/collab_{uuid.uuid4().hex[:8]}.mid"
@@ -251,7 +418,6 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
     mf.close()
     
     background_tasks.add_task(delayed_cleanup, temp_filename, 15)
-    
     headers = {"X-Generated-Chords": json.dumps(full_song_strings)}
     
     with open(temp_filename, "rb") as f:
@@ -288,7 +454,6 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
     )
 
     formatted_matches = []
-    
     inst_map = {
         "piano": instrument.Piano(),
         "harpsichord": instrument.Harpsichord(),
@@ -304,23 +469,20 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
         chosen_inst = inst_map.get(req.instrument_name.lower(), instrument.Piano())
         p.insert(0, chosen_inst)
         
-        # Determine rendering style based on user preference
         is_chord = False
         if req.playback_style == "chord":
             is_chord = True
         elif req.playback_style == "arpeggio":
             is_chord = False
-        else: # Fallback to default behavior if accessed from the melodic tab
+        else: 
             if req.search_mode in ["exact_vertical", "relative_vertical"]:
                 is_chord = True
 
         if is_chord:
-            # Render the notes simultaneously as a single block chord
             c_obj = chord.Chord([pitch.Pitch(midi=m) for m in match["raw_notes"]])
-            c_obj.quarterLength = 2.0  # Let it ring out for 2 beats
+            c_obj.quarterLength = 2.0  
             p.append(c_obj)
         else:
-            # Render horizontally as a sequential arpeggio/melody
             for midi_val in match["raw_notes"]:
                 n = note.Note()
                 n.pitch.midi = midi_val
@@ -328,7 +490,6 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
                 p.append(n)
                 
         s.append(p)
-        
         temp_filename = f"static/match_{uuid.uuid4().hex[:8]}.mid"
         mf = midi.translate.streamToMidiFile(s)
         mf.open(temp_filename, 'wb')

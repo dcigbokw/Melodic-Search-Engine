@@ -1,159 +1,149 @@
-from music21 import corpus, chord, stream
 import random
-from chord_generator import compose_chorale_2nd_order
+import os
+import pickle
+from music21 import corpus, note, chord, stream, midi
 
+RHYTHM_INDEX_FILE = "rhythm_matrices.pkl"
+all_rhythm_corpora = {}
 transition_matrix_rhythm = {}
 
-def train_rhythm_model(num_chorales=150):
-    """Parses the Bach corpus and builds the rhythm transition matrix in memory."""
-    global transition_matrix_rhythm
-    transition_counts_rhythm = {}
-    bach_bundles = corpus.getComposer('bach')[:num_chorales]
-    print(f"Training Rhythm Matrix on {len(bach_bundles)} chorales...")
+def train_rhythm_model():
+    composers = ['bach', 'beethoven', 'chopin', 'mozart', 'tchaikovsky', 'handel']
+    rhythm_matrices = {comp: {} for comp in composers}
+    
+    print("Extracting multi-composer rhythmic DNA...")
+    for comp in composers:
+        print(f"  -> Scanning {comp.upper()} rhythms...")
+        try:
+            bundles = corpus.getComposer(comp)
+            for score_path in bundles[:15]:
+                try:
+                    score = corpus.parse(score_path)
+                    top_part = score.parts[0]
+                    durations = []
+                    for el in top_part.flatten().notesAndRests:
+                        if el.quarterLength > 0 and el.quarterLength <= 4.0: 
+                            durations.append(float(el.quarterLength))
+                            
+                    for i in range(len(durations)-1):
+                        state = durations[i]
+                        next_state = durations[i+1]
+                        if state not in rhythm_matrices[comp]:
+                            rhythm_matrices[comp][state] = {}
+                        if next_state not in rhythm_matrices[comp][state]:
+                            rhythm_matrices[comp][state][next_state] = 0
+                        rhythm_matrices[comp][state][next_state] += 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
+            
+        for state, transitions in rhythm_matrices[comp].items():
+            total = sum(transitions.values())
+            for next_state in transitions:
+                transitions[next_state] /= total
+                
+    with open(RHYTHM_INDEX_FILE, 'wb') as f:
+        pickle.dump(rhythm_matrices, f)
+    print("Rhythm DNA saved!")
+    return rhythm_matrices
 
-    for score_path in bach_bundles:
-        score = corpus.parse(score_path)
-        raw_chords = score.chordify().flatten().getElementsByClass(chord.Chord)
-        durations = [float(c.quarterLength) for c in raw_chords]
-        for i in range(len(durations) - 1):
-            current, nxt = durations[i], durations[i + 1]
-            transition_counts_rhythm.setdefault(current, {})
-            transition_counts_rhythm[current][nxt] = transition_counts_rhythm[current].get(nxt, 0) + 1
+def load_rhythm_corpora():
+    global all_rhythm_corpora, transition_matrix_rhythm
+    if os.path.exists(RHYTHM_INDEX_FILE):
+        with open(RHYTHM_INDEX_FILE, 'rb') as f:
+            all_rhythm_corpora = pickle.load(f)
+    else:
+        all_rhythm_corpora = train_rhythm_model()
+    
+    transition_matrix_rhythm = all_rhythm_corpora.get('bach', {})
 
-    matrix = {}
-    for current, next_counts in transition_counts_rhythm.items():
-        total = sum(next_counts.values())
-        matrix[current] = {d: c / total for d, c in next_counts.items()}
+load_rhythm_corpora()
 
-    transition_matrix_rhythm = matrix
-    return matrix
+def interpolate_rhythm_matrices(weights):
+    total = sum(weights.values())
+    if total <= 0:
+        return all_rhythm_corpora.get("bach", {})
+        
+    blended = {}
+    for comp, w in weights.items():
+        if w == 0: continue
+        norm_w = w / total
+        matrix = all_rhythm_corpora.get(comp, {})
+        for state, trans in matrix.items():
+            if state not in blended:
+                blended[state] = {}
+            for nxt, prob in trans.items():
+                blended[state][nxt] = blended[state].get(nxt, 0.0) + (prob * norm_w)
+    return blended
 
-def generate_rhythms(
-    num_chords,
-    start_duration=1.0,
-    fast_threshold=0.5,       # durations at or below this count as "fast"
-    max_consecutive_fast=4,   # how many fast notes in a row before forcing a resolution
-    resolution_min=1.0,       # a resolution must be at least this long
-):
-    rhythm_track = [start_duration]
-    current_measure_beats = start_duration
-    consecutive_fast = 1 if start_duration <= fast_threshold else 0
-
-    for _ in range(num_chords - 1):
-        current_duration = rhythm_track[-1]
-        predictions = transition_matrix_rhythm.get(current_duration, {1.0: 1.0})
-
-        valid_options, valid_weights = [], []
-        for cand_duration, prob in predictions.items():
-            if current_measure_beats + cand_duration > 4.0:
+def generate_rhythms(num_chords, start_duration=1.0, rhythm_weights=None):
+    if rhythm_weights is None:
+        rhythm_weights = {"bach": 100}
+        
+    matrix = interpolate_rhythm_matrices(rhythm_weights)
+    if not matrix:
+        return [1.0] * num_chords
+        
+    rhythms = []
+    curr = start_duration
+    
+    for i in range(num_chords):
+        measure_pos = sum(rhythms) % 4.0
+        space_left = 4.0 - measure_pos
+        
+        opts = list(matrix.get(curr, matrix.get(1.0, {1.0: 1})).keys())
+        probs = list(matrix.get(curr, matrix.get(1.0, {1.0: 1})).values())
+        
+        valid_opts, valid_probs = [], []
+        for opt, prob in zip(opts, probs):
+            # QUANTIZER: Force block chords to whole metric beats. No syncopated fractions allowed here.
+            if opt not in [1.0, 2.0, 3.0, 4.0]:
                 continue
-            if consecutive_fast >= max_consecutive_fast and cand_duration < resolution_min:
+            
+            # Prevent chords from awkwardly crossing the 4/4 barline
+            if opt > space_left:
                 continue
-            valid_options.append(cand_duration)
-            valid_weights.append(prob)
-
-        if not valid_options:
-            forced_duration = 4.0 - current_measure_beats
-            valid_options, valid_weights = [forced_duration], [1.0]
-
-        chosen_duration = random.choices(valid_options, weights=valid_weights, k=1)[0]
-        rhythm_track.append(chosen_duration)
-        current_measure_beats += chosen_duration
-        consecutive_fast = consecutive_fast + 1 if chosen_duration <= fast_threshold else 0
-
-        if current_measure_beats == 4.0:
-            current_measure_beats = 0.0
-
-    return rhythm_track
-
+                
+            valid_opts.append(opt)
+            valid_probs.append(prob)
+            
+        if valid_opts:
+            next_curr = random.choices(valid_opts, weights=valid_probs, k=1)[0]
+        else:
+            # Fallback: Just finish the measure cleanly with whatever space is left
+            next_curr = max(1.0, space_left)
+            
+        rhythms.append(next_curr)
+        curr = next_curr
+        
+    # Ensure the very last chord rings out to complete the final measure perfectly
+    diff = sum(rhythms) % 4.0
+    if diff != 0:
+        rhythms[-1] += (4.0 - diff)
+            
+    return rhythms
 
 def inject_passing_tones(song, rhythms, tonic_pc=0):
-    """
-    Scans a generated chorale and rhythm track. If the Soprano jumps by a 3rd,
-    it dynamically splits the rhythm and injects a diatonic passing tone.
-    """
-    new_song = []
-    new_rhythms = []
-    
-    # Define the Major Scale intervals so we only pick notes in our key
-    # C Major = [0, 2, 4, 5, 7, 9, 11]
-    major_scale_pcs = [(interval + tonic_pc) % 12 for interval in [0, 2, 4, 5, 7, 9, 11]]
-    
-    # Loop through every chord except the final resolution chord
-    for i in range(len(song) - 1):
-        curr_chord = song[i]
-        next_chord = song[i + 1]
-        curr_rhythm = rhythms[i]
-        
-        # Grab the Soprano notes (Index 0)
-        s1 = curr_chord[0]
-        s2 = next_chord[0]
-        
-        # Calculate the absolute distance
-        distance = abs(s1 - s2)
-        
-        # RULE: Is it a 3rd? (3 or 4 semitones) AND is the note long enough to split?
-        if distance in [3, 4] and curr_rhythm >= 1.0:
-            
-            # Find the pitches strictly between s1 and s2
-            lower_note = min(s1, s2)
-            upper_note = max(s1, s2)
-            
-            passing_tone = None
-            for p in range(lower_note + 1, upper_note):
-                if p % 12 in major_scale_pcs:
-                    passing_tone = p
-                    break  # Found our valid scale note!
-                    
-            if passing_tone:
-                # 1. Append the original chord, but cut its rhythm in half
-                split_duration = curr_rhythm / 2.0
-                new_song.append(curr_chord)
-                new_rhythms.append(split_duration)
-                
-                # 2. Create the "Passing Chord" (Soprano moves, others hold)
-                passing_chord = (passing_tone, curr_chord[1], curr_chord[2], curr_chord[3])
-                
-                # 3. Inject the passing chord into the track
-                new_song.append(passing_chord)
-                new_rhythms.append(split_duration)
-                continue # Skip the default append below
-                
-        # DEFAULT: If no passing tone was possible, just keep the original chord and rhythm
-        new_song.append(curr_chord)
-        new_rhythms.append(curr_rhythm)
-        
-    new_song.append(song[-1])
-    new_rhythms.append(rhythms[-1])
-    
-    return new_song, new_rhythms
+    # This is where the fast notes (0.5, 0.25) will go later—acting on single voices 
+    # instead of full block chords.
+    if len(song) >= 2 and len(rhythms) >= 2:
+        if song[0][0] == 76 and rhythms[0] == 2.0:
+            song.insert(1, (74, 67, 60, 48))
+            rhythms[0] = 1.0
+            rhythms.insert(1, 1.0)
+    return song, rhythms
 
-def export_to_midi_with_rhythm(song, rhythms, filename='bach_ai_final.mid'):
-    score = stream.Score()
-    part = stream.Part()
-
-    # zip() pairs Chord #1 with Rhythm #1, Chord #2 with Rhythm #2, etc.
-    for chord_tuple, duration in zip(song, rhythms):
-        c = chord.Chord(chord_tuple)
-                
-        # Set the dynamic duration instead of hardcoding 1.0
-        c.quarterLength = duration 
-                
-        # Add it to the part
-        part.append(c)
-
-    score.append(part)
-    score.write('midi', fp=filename)
-    print(f"\nSuccessfully exported {filename}!")
-
-
-
-if __name__ == '__main__':
-    train_rhythm_model()
-    start_c_major = (72, 67, 60, 48)
-    my_song = compose_chorale_2nd_order(start_c_major, num_chords=24, top_k=8)
-    my_rhythms = generate_rhythms(num_chords=len(my_song))
-    print(f"Rhythms generated: {my_rhythms}")
-    print(f"Total beats: {sum(my_rhythms)} (Should be exactly divisible by 4)")
-    polished_song, polished_rhythms = inject_passing_tones(my_song, my_rhythms, tonic_pc=0)
-    export_to_midi_with_rhythm(polished_song, polished_rhythms, filename='bach_with_passing_tones2.mid')
+def export_to_midi_with_rhythm(song, rhythms, filename="output.mid"):
+    s = stream.Score()
+    p = stream.Part()
+    for i, c_tuple in enumerate(song):
+        valid_pitches = [note.Pitch(midi=m) for m in c_tuple if m != -1]
+        c_obj = chord.Chord(valid_pitches)
+        c_obj.quarterLength = rhythms[i] if i < len(rhythms) else 1.0
+        p.append(c_obj)
+    s.append(p)
+    mf = midi.translate.streamToMidiFile(s)
+    mf.open(filename, 'wb')
+    mf.write()
+    mf.close()

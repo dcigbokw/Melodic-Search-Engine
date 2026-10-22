@@ -34,6 +34,11 @@
         .match-meta { font-size: 0.85rem; color: #64748b; margin-bottom: 10px; }
         
         pre { background: #1e293b; color: #e2e8f0; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
+        
+        .slider-row { display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem; }
+        .slider-label { width: 65px; flex-shrink: 0; }
+        .slider-input { flex: 1; margin: 0 8px; min-width: 0; }
+        .slider-val { width: 35px; text-align: right; font-weight: bold; flex-shrink: 0; }
     </style>
 </head>
 <body>
@@ -46,8 +51,51 @@
         <h2>1. Generate a Chorale</h2>
         <p>Uses a trained Markov chain and recursive backtracking to generate a 4-part chorale.</p>
         
-        <label>Number of Chords:</label>
-        <input type="number" id="numChords" value="16" min="4" max="64">
+        <div style="display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 140px;">
+                <label style="margin-top: 0;">Composer Style:</label>
+                <select id="genComposer" style="width: 100%;">
+                    <option value="bach" selected>J.S. Bach</option>
+                    <option value="beethoven">Beethoven</option>
+                    <option value="chopin">Chopin</option>
+                    <option value="mozart">Mozart</option>
+                    <option value="tchaikovsky">Tchaikovsky</option>
+                    <option value="handel">Handel</option>
+                </select>
+            </div>
+            
+            <div style="flex: 1; min-width: 140px;">
+                <label style="margin-top: 0;">Target Key:</label>
+                <select id="genKeySelect" style="width: 100%;">
+                    <option value="0" selected>C Major / A Minor</option>
+                    <option value="7">G Major / E Minor</option>
+                    <option value="5">F Major / D Minor</option>
+                </select>
+            </div>
+
+            <div style="flex: 1; min-width: 100px;">
+                <label style="margin-top: 0;">Tempo:</label>
+                <select id="genTempo" style="width: 100%;">
+                    <option value="adagio">Adagio</option>
+                    <option value="andante" selected>Andante</option>
+                    <option value="allegro">Allegro</option>
+                </select>
+            </div>
+
+            <div style="flex: 1; min-width: 100px;">
+                <label style="margin-top: 0;">Dynamics:</label>
+                <select id="genDynamics" style="width: 100%;">
+                    <option value="piano">Piano</option>
+                    <option value="mf" selected>Mezzo-forte</option>
+                    <option value="forte">Forte</option>
+                </select>
+            </div>
+            
+            <div style="flex: 1; min-width: 80px;">
+                <label style="margin-top: 0;">Chords:</label>
+                <input type="number" id="numChords" value="16" min="4" max="64" style="width: 100%;">
+            </div>
+        </div>
         
         <button id="generateBtn">Generate Audio & Sheet Music</button>
         <div id="genStatus" class="status"></div>
@@ -65,54 +113,145 @@
 
         <div style="display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; align-items: flex-start;">
             
-            <div style="flex: 2; min-width: 250px; background: white; padding: 15px; border-radius: 6px; border: 1px solid #cbd5e1;">
-                <label style="margin-top: 0;">Style Blend (Combinatorial Matrix):</label>
-                <div id="composerSliders" style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
-                        <span>Bach:</span>
-                        <input type="range" id="w-bach" min="0" max="100" value="100" style="width: 100px; margin: 0;">
-                        <span id="val-bach" style="width: 40px; text-align: right; font-weight: bold;">100%</span>
+            <div style="flex: 2; min-width: 300px; background: white; padding: 15px; border-radius: 6px; border: 1px solid #cbd5e1; display: flex; gap: 20px; flex-wrap: wrap;">
+                
+                <!-- HARMONY SLIDERS -->
+                <div style="flex: 1; min-width: 150px;">
+                    <label style="margin-top: 0; font-size: 0.8rem;">Harmonic Style Blend:</label>
+                    <div id="composerSliders" style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                        <div class="slider-row">
+                            <span class="slider-label">Bach:</span>
+                            <input type="range" id="w-bach" class="slider-input" min="0" max="100" value="100">
+                            <span id="val-bach" class="slider-val">100%</span>
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Beethoven:</span>
+                            <input type="range" id="w-beethoven" class="slider-input" min="0" max="100" value="0">
+                            <span id="val-beethoven" class="slider-val">0%</span>
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Chopin:</span>
+                            <input type="range" id="w-chopin" class="slider-input" min="0" max="100" value="0">
+                            <span id="val-chopin" class="slider-val">0%</span>
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Mozart:</span>
+                            <input type="range" id="w-mozart" class="slider-input" min="0" max="100" value="0">
+                            <span id="val-mozart" class="slider-val">0%</span>
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Tchaikovsky:</span>
+                            <input type="range" id="w-tchaikovsky" class="slider-input" min="0" max="100" value="0">
+                            <span id="val-tchaikovsky" class="slider-val">0%</span>
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Handel:</span>
+                            <input type="range" id="w-handel" class="slider-input" min="0" max="100" value="0">
+                            <span id="val-handel" class="slider-val">0%</span>
+                        </div>
                     </div>
-                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
-                        <span>Beethoven:</span>
-                        <input type="range" id="w-beethoven" min="0" max="100" value="0" style="width: 100px; margin: 0;">
-                        <span id="val-beethoven" style="width: 40px; text-align: right; font-weight: bold;">0%</span>
-                    </div>
-                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
-                        <span>Chopin:</span>
-                        <input type="range" id="w-chopin" min="0" max="100" value="0" style="width: 100px; margin: 0;">
-                        <span id="val-chopin" style="width: 40px; text-align: right; font-weight: bold;">0%</span>
-                    </div>
-                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
-                        <span>Mozart:</span>
-                        <input type="range" id="w-mozart" min="0" max="100" value="0" style="width: 100px; margin: 0;">
-                        <span id="val-mozart" style="width: 40px; text-align: right; font-weight: bold;">0%</span>
-                    </div>
-                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
-                        <span>Tchaikovsky:</span>
-                        <input type="range" id="w-tchaikovsky" min="0" max="100" value="0" style="width: 100px; margin: 0;">
-                        <span id="val-tchaikovsky" style="width: 40px; text-align: right; font-weight: bold;">0%</span>
-                    </div>
-                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
-                        <span>Handel:</span>
-                        <input type="range" id="w-handel" min="0" max="100" value="0" style="width: 100px; margin: 0;">
-                        <span id="val-handel" style="width: 40px; text-align: right; font-weight: bold;">0%</span>
+                </div>
+
+                <!-- RHYTHM SLIDERS -->
+                <div style="flex: 1; min-width: 150px;">
+                    <label style="margin-top: 0; font-size: 0.8rem;">Rhythmic Style Blend:</label>
+                    <div id="rhythmSliders" style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                        <div class="slider-row">
+                            <span class="slider-label">Bach:</span>
+                            <input type="range" id="rw-bach" class="slider-input" min="0" max="100" value="100">
+                            <span id="rval-bach" class="slider-val">100%</span>
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Beethoven:</span>
+                            <input type="range" id="rw-beethoven" class="slider-input" min="0" max="100" value="0">
+                            <span id="rval-beethoven" class="slider-val">0%</span>
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Chopin:</span>
+                            <input type="range" id="rw-chopin" class="slider-input" min="0" max="100" value="0">
+                            <span id="rval-chopin" class="slider-val">0%</span>
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Mozart:</span>
+                            <input type="range" id="rw-mozart" class="slider-input" min="0" max="100" value="0">
+                            <span id="rval-mozart" class="slider-val">0%</span>
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Tchaikovsky:</span>
+                            <input type="range" id="rw-tchaikovsky" class="slider-input" min="0" max="100" value="0">
+                            <span id="rval-tchaikovsky" class="slider-val">0%</span>
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Handel:</span>
+                            <input type="range" id="rw-handel" class="slider-input" min="0" max="100" value="0">
+                            <span id="rval-handel" class="slider-val">0%</span>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <div style="flex: 1; display: flex; flex-direction: column; gap: 15px; min-width: 150px;">
+           <div style="flex: 1; display: flex; flex-direction: column; gap: 15px; min-width: 150px;">
+                <!-- NEW: AI Generative Parameters -->
                 <div>
-                    <label style="margin-top: 0;">Tempo (Speed):</label>
-                    <select id="tempoSelect" style="width: 100%;">
+                    <label style="margin-top: 0; font-size: 0.8rem;">Markov Depth (N-Order):</label>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="range" id="markovDepth" min="1" max="3" value="1" style="flex: 1;">
+                        <span id="val-depth" style="font-weight: bold; font-size: 0.8rem;">1</span>
+                    </div>
+                    <small style="font-size: 0.65rem; color: #64748b;">Higher = More historically accurate, Lower = More random</small>
+                </div>
+
+                <div>
+                    <label style="margin-top: 0; font-size: 0.8rem;">Temperature (Creativity):</label>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="range" id="aiTemperature" min="1" max="20" value="10" style="flex: 1;">
+                        <span id="val-temp" style="font-weight: bold; font-size: 0.8rem;">1.0</span>
+                    </div>
+                    <small style="font-size: 0.65rem; color: #64748b;">Softmax scaling for probability</small>
+                </div>
+
+                <!-- NEW: Note Range Slider -->
+                <div>
+                    <label style="margin-top: 0; font-size: 0.8rem;">Vocal Range Expansion:</label>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="range" id="rangeExpansion" min="0" max="12" value="0" style="flex: 1;">
+                        <span id="val-range" style="font-weight: bold; font-size: 0.8rem;">+0</span>
+                    </div>
+                    <small style="font-size: 0.65rem; color: #64748b;">Expand strict classical tessitura (semitones)</small>
+                </div>
+                
+                <!-- NEW: Target Key Dropdown -->
+                <div>
+                    <label style="margin-top: 0; font-size: 0.8rem;">Target Key (Tonic):</label>
+                    <select id="keySelect" style="width: 100%; font-size: 0.85rem;">
+                        <option value="0" selected>C Major / A Minor</option>
+                        <option value="7">G Major / E Minor</option>
+                        <option value="5">F Major / D Minor</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label style="margin-top: 0; font-size: 0.8rem;">Cadence Preference:</label>
+                    <select id="cadenceSelect" style="width: 100%; font-size: 0.85rem;">
+                        <option value="none" selected>Any (No Forcing)</option>
+                        <option value="authentic">Authentic (V -> I)</option>
+                        <option value="half">Half (-> V)</option>
+                        <option value="plagal">Plagal (IV -> I)</option>
+                    </select>
+                </div>
+
+                <!-- Existing Expression Controls -->
+                <div>
+                    <label style="margin-top: 0; font-size: 0.8rem;">Tempo (Speed):</label>
+                    <select id="tempoSelect" style="width: 100%; font-size: 0.85rem;">
                         <option value="adagio">Adagio (Slow)</option>
                         <option value="andante" selected>Andante (Walking)</option>
                         <option value="allegro">Allegro (Fast)</option>
                     </select>
                 </div>
                 <div>
-                    <label style="margin-top: 0;">Dynamics (Volume):</label>
-                    <select id="dynamicSelect" style="width: 100%;">
+                    <label style="margin-top: 0; font-size: 0.8rem;">Dynamics (Volume):</label>
+                    <select id="dynamicSelect" style="width: 100%; font-size: 0.85rem;">
                         <option value="piano">Piano (Soft)</option>
                         <option value="mf" selected>Mezzo-forte (Medium)</option>
                         <option value="forte">Forte (Loud)</option>
@@ -230,7 +369,9 @@
                     <option value="arpeggio">Arpeggio (Sequential)</option>
                 </select>
             </div>
-            <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+        </div>
+        
+        <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
             <div style="flex: 1; min-width: 140px;">
                 <label style="margin-top: 0;">Search Mode:</label>
                 <select id="vertSearchMode" style="width: 100%;">
@@ -238,7 +379,6 @@
                     <option value="relative_vertical" selected>Sounds Like This (Transposition-Invariant)</option>
                 </select>
             </div>
-            <!-- Keep your other vertical dropdowns here... -->
             <div style="flex: 1; min-width: 120px;">
                 <label style="margin-top: 0;">Instrument:</label>
                 <select id="vertSearchInstrument" style="width: 100%;">
@@ -269,13 +409,35 @@
     <script>
         // --- SLIDER LOGIC ---
         ['bach', 'beethoven', 'chopin', 'mozart', 'tchaikovsky', 'handel'].forEach(comp => {
-            const slider = document.getElementById(`w-${comp}`);
-            slider.addEventListener('input', (e) => {
-                document.getElementById(`val-${comp}`).innerText = `${e.target.value}%`;
-            });
+            // Update Harmony Sliders
+            const hSlider = document.getElementById(`w-${comp}`);
+            if (hSlider) {
+                hSlider.addEventListener('input', (e) => {
+                    document.getElementById(`val-${comp}`).innerText = `${e.target.value}%`;
+                });
+            }
+            
+            // Update Rhythm Sliders
+            const rSlider = document.getElementById(`rw-${comp}`);
+            if (rSlider) {
+                rSlider.addEventListener('input', (e) => {
+                    document.getElementById(`rval-${comp}`).innerText = `${e.target.value}%`;
+                });
+            }
         });
 
-        // --- 1. GENERATOR LOGIC ---
+        // --- NEW AI PARAMETER SLIDER LOGIC ---
+        document.getElementById('markovDepth').addEventListener('input', (e) => {
+            document.getElementById('val-depth').innerText = e.target.value;
+        });
+        document.getElementById('aiTemperature').addEventListener('input', (e) => {
+            document.getElementById('val-temp').innerText = (e.target.value / 10).toFixed(1);
+        });
+        document.getElementById('rangeExpansion').addEventListener('input', (e) => {
+            document.getElementById('val-range').innerText = `+${e.target.value}`;
+        });
+
+       // --- 1. GENERATOR LOGIC ---
         document.getElementById('generateBtn').addEventListener('click', async () => {
             const btn = document.getElementById('generateBtn');
             const status = document.getElementById('genStatus');
@@ -289,8 +451,16 @@
                 const response = await fetch('/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ num_chords: parseInt(document.getElementById('numChords').value), top_k: 5 })
+                    body: JSON.stringify({ 
+                        num_chords: parseInt(document.getElementById('numChords').value),
+                        composer: document.getElementById('genComposer').value,
+                        tonic_pc: parseInt(document.getElementById('genKeySelect').value),
+                        tempo: document.getElementById('genTempo').value,
+                        dynamics: document.getElementById('genDynamics').value
+                    })
                 });
+                
+                // The rogue "}" was right here and has been removed.
 
                 if (!response.ok) throw new Error("Generation failed.");
                 const blob = await response.blob();
@@ -307,7 +477,6 @@
                 btn.disabled = false;
             }
         });
-
         // --- 2. CO-CREATIVE WORKSPACE LOGIC (SATB) ---
         const chordWorkspace = document.getElementById('chordWorkspace');
 
@@ -372,8 +541,21 @@
                             tchaikovsky: parseInt(document.getElementById('w-tchaikovsky').value),
                             handel: parseInt(document.getElementById('w-handel').value)
                         },
+                        rhythm_weights: { 
+                            bach: parseInt(document.getElementById('rw-bach').value),
+                            beethoven: parseInt(document.getElementById('rw-beethoven').value),
+                            chopin: parseInt(document.getElementById('rw-chopin').value),
+                            mozart: parseInt(document.getElementById('rw-mozart').value),
+                            tchaikovsky: parseInt(document.getElementById('rw-tchaikovsky').value),
+                            handel: parseInt(document.getElementById('rw-handel').value)
+                        },
                         tempo: document.getElementById('tempoSelect').value,
-                        dynamics: document.getElementById('dynamicSelect').value
+                        dynamics: document.getElementById('dynamicSelect').value,
+                        markov_order: parseInt(document.getElementById('markovDepth').value),
+                        temperature: parseInt(document.getElementById('aiTemperature').value) / 10.0,
+                        cadence_pref: document.getElementById('cadenceSelect').value,
+                        range_expansion: parseInt(document.getElementById('rangeExpansion').value),
+                        tonic_pc: parseInt(document.getElementById('keySelect').value)
                     })
                 });
 
