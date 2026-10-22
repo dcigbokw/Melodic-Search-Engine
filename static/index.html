@@ -500,7 +500,6 @@
         // --- 2. CO-CREATIVE WORKSPACE LOGIC (SATB) ---
         const chordWorkspace = document.getElementById('chordWorkspace');
 
-        // NEW: Now accepts an explicit duration parameter and renders a beat input
         function createSATBSlot(s = 'C5', a = 'G4', t = 'E4', b = 'C3', dur = 1.0) {
             const slot = document.createElement('div');
             slot.className = 'chord-slot';
@@ -617,7 +616,6 @@
                     throw new Error(errData.detail || "API Error.");
                 }
 
-                // NEW: We parse the generated headers and append them to the existing UI blocks, keeping meters safe!
                 const generatedChordsHeader = response.headers.get("X-Generated-Chords");
                 const generatedRhythmsHeader = response.headers.get("X-Generated-Rhythms");
                 
@@ -694,6 +692,7 @@
                     card.className = "match-card";
                     const visId = `searchVis_${index}`;
                     const playerId = `searchPlayer_${index}`;
+                    const ragBtnId = `ragSearchBtn_${index}`;
 
                     card.innerHTML = `
                         <h4>Match #${index + 1}: ${match.title}</h4>
@@ -703,8 +702,55 @@
                         </div>
                         <midi-visualizer type="staff" id="${visId}" src="${match.midi_url}"></midi-visualizer>
                         <midi-player id="${playerId}" visualizer="#${visId}" sound-font src="${match.midi_url}"></midi-player>
+                        <button id="${ragBtnId}" style="margin-top: 10px; background: #10b981;">Use as AI Seed in Workspace</button>
                     `;
                     resultsContainer.appendChild(card);
+                    
+                    // Horizontal RAG Injection & Harmonize Prompt
+                    document.getElementById(ragBtnId).addEventListener('click', async () => {
+                        const workspace = document.getElementById('chordWorkspace');
+                        const doHarmonize = confirm("Do you want to search the corpus to automatically harmonize this melody?");
+                        
+                        if (doHarmonize) {
+                            const sopranoNotes = match.rag_satb.map(satb => satb[0]);
+                            try {
+                                const response = await fetch('/harmonize', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ 
+                                        melody: sopranoNotes,
+                                        tonic_pc: parseInt(document.getElementById('keySelect').value) || 0,
+                                        composer_weights: { 
+                                            bach: parseInt(document.getElementById('w-bach').value) || 100,
+                                            beethoven: parseInt(document.getElementById('w-beethoven').value) || 0,
+                                            chopin: parseInt(document.getElementById('w-chopin').value) || 0,
+                                            mozart: parseInt(document.getElementById('w-mozart').value) || 0,
+                                            tchaikovsky: parseInt(document.getElementById('w-tchaikovsky').value) || 0,
+                                            handel: parseInt(document.getElementById('w-handel').value) || 0
+                                        }
+                                    })
+                                });
+                                
+                                if (response.ok) {
+                                    const data = await response.json();
+                                    data.chords.forEach(satb => {
+                                        createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0);
+                                    });
+                                } else {
+                                    alert("Could not find a strict rule-compliant harmonization. Appending unharmonized melody.");
+                                    match.rag_satb.forEach(satb => createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0));
+                                }
+                            } catch(e) {
+                                match.rag_satb.forEach(satb => createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0));
+                            }
+                        } else {
+                            match.rag_satb.forEach(satb => {
+                                createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0);
+                            });
+                        }
+                        
+                        workspace.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    });
                 });
 
             } catch (error) {
@@ -759,6 +805,7 @@
                     card.className = "match-card";
                     const visId = `vertSearchVis_${index}`;
                     const playerId = `vertSearchPlayer_${index}`;
+                    const ragBtnId = `ragVertBtn_${index}`;
 
                     card.innerHTML = `
                         <h4>Match #${index + 1}: ${match.title}</h4>
@@ -768,8 +815,18 @@
                         </div>
                         <midi-visualizer type="staff" id="${visId}" src="${match.midi_url}"></midi-visualizer>
                         <midi-player id="${playerId}" visualizer="#${visId}" sound-font src="${match.midi_url}"></midi-player>
+                        <button id="${ragBtnId}" style="margin-top: 10px; background: #10b981;">Use as AI Seed in Workspace</button>
                     `;
                     resultsContainer.appendChild(card);
+                    
+                    // Vertical RAG Injection Logic (Appends directly)
+                    document.getElementById(ragBtnId).addEventListener('click', () => {
+                        const workspace = document.getElementById('chordWorkspace');
+                        match.rag_satb.forEach(satb => {
+                            createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0);
+                        });
+                        workspace.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    });
                 });
 
             } catch (error) {
@@ -781,4 +838,3 @@
     </script>
 </body>
 </html>
-```<FollowUp>

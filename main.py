@@ -441,6 +441,64 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
     return Response(content=midi_data, media_type="audio/midi", headers=headers)
 
 # ==========================================
+# CORPUS-RETRIEVAL HARMONIZE ENDPOINT
+# ==========================================
+class HarmonizeRequest(BaseModel):
+    melody: List[str]
+    tonic_pc: int = 0
+    composer_weights: dict = {"bach": 100, "beethoven": 0, "chopin": 0, "mozart": 0, "tchaikovsky": 0, "handel": 0}
+
+@app.post("/harmonize")
+def harmonize_melody_endpoint(req: HarmonizeRequest):
+    # Retrieve all known historical chords from the selected corpus
+    matrix_1st = interpolate_matrices(all_corpora, req.composer_weights, "first_order")
+    historical_corpus_chords = [c for c in matrix_1st.keys() if isinstance(c, tuple) and c[0] != -1]
+    
+    # Parse requested Soprano pitches
+    melody_midi = []
+    for n in req.melody:
+        if n.lower() == 'rest':
+            melody_midi.append(-1)
+        else:
+            try:
+                melody_midi.append(pitch.Pitch(n).midi)
+            except:
+                melody_midi.append(60)
+
+    successful_drafts = []
+    
+    def dfs_harm(depth, path):
+        if len(successful_drafts) > 0: return
+        if depth == len(melody_midi):
+            successful_drafts.append(path.copy())
+            return
+            
+        target_soprano = melody_midi[depth]
+        if target_soprano == -1:
+             path.append((-1, -1, -1, -1))
+             dfs_harm(depth + 1, path)
+             path.pop()
+             return
+
+        # 1. Search the corpus for chords that have this exact Soprano note
+        matching_chords = [c for c in historical_corpus_chords if c[0] == target_soprano]
+        random.shuffle(matching_chords)
+        
+        for cand in matching_chords:
+            # 2. Suitability Measure: Ensure the chosen corpus chord transitions legally from the previous chord
+            if depth == 0 or is_valid_transition(path[-1], cand, req.tonic_pc):
+                 path.append(cand)
+                 dfs_harm(depth + 1, path)
+                 path.pop()
+                 
+    dfs_harm(0, [])
+    
+    if successful_drafts:
+        return {"chords": [midi_tuple_to_satb(c) for c in successful_drafts[0]]}
+    else:
+        raise HTTPException(status_code=400, detail="Could not find a rule-compliant harmonization for this melody in the current corpus.")
+
+# ==========================================
 # 4. THE SEARCH ENDPOINT
 # ==========================================
 class SearchRequest(BaseModel):
@@ -514,13 +572,26 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
         
         background_tasks.add_task(delayed_cleanup, temp_filename, 15)
         
+        # Format the match for RAG (Contextual Seeding) into the workspace
+        rag_satb = []
+        if is_chord:
+            # Vertical Search: Pad or truncate the matched chord to exactly 4 voices
+            padded = match["raw_notes"][:4] + [-1] * max(0, 4 - len(match["raw_notes"]))
+            # Reverse so it maps Soprano (highest) to Bass (lowest)
+            padded = sorted(padded, reverse=True)
+            rag_satb.append(midi_tuple_to_satb(padded))
+        else:
+            # Horizontal Search: Place the melody in the Soprano, rests in the other voices
+            for note_val in match["raw_notes"]:
+                rag_satb.append(midi_tuple_to_satb([note_val, -1, -1, -1]))
+
         formatted_matches.append({
             "title": match["title"],
             "composer": match["composer"],
             "score": match["score"],
-            "midi_url": f"/{temp_filename}" 
+            "midi_url": f"/{temp_filename}",
+            "rag_satb": rag_satb # Send the parsed RAG seed to the frontend
         })
-
     return {
         "status": "success", 
         "algorithm": req.algorithm,
