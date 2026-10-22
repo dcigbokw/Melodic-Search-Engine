@@ -282,16 +282,42 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
 
     human_sequence = [satb_to_midi_tuple(block) for block in req.current_chords]
     
-    # NEW: Maintain the user's manual rhythms
     human_rhythms = req.current_durations if len(req.current_durations) == len(human_sequence) else [1.0] * len(human_sequence)
     
     is_clean, error_msg = audit_human_sequence(human_sequence, is_valid_transition)
     if not is_clean:
-        raise HTTPException(status_code=400, detail=error_msg)
+        # XAI Enrichment - Map classical errors to actionable solutions
+        msg_lower = error_msg.lower()
+        solution = "Try adjusting the voices to move smoothly by step, keeping common tones where possible, while the Bass provides the foundation."
+        
+        if "parallel" in msg_lower and "5" in msg_lower:
+            solution = "Parallel 5ths destroy voice independence. Fix this by forcing the two offending voices into contrary motion (one goes up, one goes down), or keep one voice on a common tone."
+        elif "parallel" in msg_lower and ("8" in msg_lower or "octave" in msg_lower):
+            solution = "Parallel octaves make 4-part harmony sound like 3 parts. Revoice the destination chord so the voices land on different intervals (e.g., a 3rd and a 5th)."
+        elif "cross" in msg_lower or "overlap" in msg_lower:
+            solution = "Voice crossing (e.g., Alto singing higher than Soprano) confuses the listener's ear. Swap their notes to maintain a strict Soprano > Alto > Tenor > Bass vertical stack."
+        elif "range" in msg_lower or "tessitura" in msg_lower:
+            solution = "A voice is singing outside its traditional choral range. Try dropping or raising the offending note by exactly one octave (12 semitones)."
+        elif "seventh" in msg_lower and "resolve" in msg_lower:
+            solution = "Chord sevenths must always resolve downwards by step. Move the note that has the 7th down to the nearest scale degree in the next chord."
+        elif "leading" in msg_lower and "resolve" in msg_lower:
+            solution = "The leading tone (the 7th degree of the scale) in an outer voice must resolve UP to the tonic. Adjust the destination note."
+            
+        # Pass a structured JSON dictionary back to the UI
+        raise HTTPException(status_code=400, detail={"error": error_msg, "solution": solution})
     
     current_state = human_sequence[-1]
     fallback_options = [c for c in matrix_1st.keys() if isinstance(c, tuple) and c[0] != -1]
     successful_drafts = [] 
+    
+    # Initialize XAI Tracking Stats
+    xai_stats = {
+        "total_evaluated": 0,
+        "out_of_range": 0,
+        "cadence_violations": 0,
+        "voice_leading_rejections": 0,
+        "accepted_branches": 0
+    }
     
     RANGES = {0: (60, 81), 1: (53, 74), 2: (48, 69), 3: (40, 62)}
     
@@ -330,9 +356,12 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
             opts.extend(random.sample(fallback_options, min(20, len(fallback_options))))
         
         for cand in opts:
+            xai_stats["total_evaluated"] += 1 # XAI: Track total branches
+            
             cand_state = cand[-1] if isinstance(cand, tuple) and isinstance(cand[0], tuple) else cand
             curr_state = path[-1]
             
+            # XAI: Range Checks
             out_of_range = False
             if cand_state[0] != -1:
                 for v in range(4):
@@ -340,31 +369,43 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
                     if not (min_pitch - req.range_expansion <= cand_state[v] <= max_pitch + req.range_expansion):
                         out_of_range = True
                         break
-            if out_of_range: continue
+            if out_of_range: 
+                xai_stats["out_of_range"] += 1
+                continue
 
+            # XAI: Cadence Checks
+            cadence_failed = False
             if cand_state[0] != -1 and req.cadence_pref != "none":
                 is_penultimate = (current_depth == req.num_to_add - 1)
                 is_ultimate = (current_depth == req.num_to_add)
                 bass_pc = cand_state[3] % 12
                 
                 if req.cadence_pref == "authentic":
-                    if is_penultimate and bass_pc != (req.tonic_pc + 7) % 12: continue 
-                    if is_ultimate and bass_pc != req.tonic_pc: continue 
+                    if is_penultimate and bass_pc != (req.tonic_pc + 7) % 12: cadence_failed = True 
+                    if is_ultimate and bass_pc != req.tonic_pc: cadence_failed = True 
                 elif req.cadence_pref == "half":
-                    if is_ultimate and bass_pc != (req.tonic_pc + 7) % 12: continue 
+                    if is_ultimate and bass_pc != (req.tonic_pc + 7) % 12: cadence_failed = True 
                 elif req.cadence_pref == "plagal":
-                    if is_penultimate and bass_pc != (req.tonic_pc + 5) % 12: continue 
-                    if is_ultimate and bass_pc != req.tonic_pc: continue 
+                    if is_penultimate and bass_pc != (req.tonic_pc + 5) % 12: cadence_failed = True 
+                    if is_ultimate and bass_pc != req.tonic_pc: cadence_failed = True 
 
+            if cadence_failed:
+                xai_stats["cadence_violations"] += 1
+                continue
+
+            # XAI: Classical Voice-Leading Rules Check
             if is_valid_transition(curr_state, cand_state, req.tonic_pc):
                 h = hash(tuple(path + [cand_state]))
                 if h in visited:
                     continue
                 visited.add(h)
                 
+                xai_stats["accepted_branches"] += 1
                 path.append(cand_state)
                 dfs_extend(path, visited)
                 path.pop()
+            else:
+                xai_stats["voice_leading_rejections"] += 1
 
     dfs_extend(human_sequence.copy(), set())
     
@@ -383,7 +424,6 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
             
     full_song_tuples = human_sequence + ai_extension
     
-    # NEW: Generate rhythms only for the newly added AI chords!
     ai_rhythms = generate_rhythms(num_chords=len(ai_extension), rhythm_weights=req.rhythm_weights)
     full_rhythms = human_rhythms + ai_rhythms
     
@@ -429,11 +469,13 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
     
     background_tasks.add_task(delayed_cleanup, temp_filename, 15)
     
-    # NEW: Return only the newly generated AI block so we can safely append it
     ai_song_strings = [midi_tuple_to_satb(c) for c in ai_extension]
+    
+    # Send XAI log to the frontend
     headers = {
         "X-Generated-Chords": json.dumps(ai_song_strings),
-        "X-Generated-Rhythms": json.dumps(ai_rhythms)
+        "X-Generated-Rhythms": json.dumps(ai_rhythms),
+        "X-XAI-Stats": json.dumps(xai_stats)
     }
     
     with open(temp_filename, "rb") as f:
@@ -450,11 +492,9 @@ class HarmonizeRequest(BaseModel):
 
 @app.post("/harmonize")
 def harmonize_melody_endpoint(req: HarmonizeRequest):
-    # Retrieve all known historical chords from the selected corpus
     matrix_1st = interpolate_matrices(all_corpora, req.composer_weights, "first_order")
     historical_corpus_chords = [c for c in matrix_1st.keys() if isinstance(c, tuple) and c[0] != -1]
     
-    # Parse requested Soprano pitches
     melody_midi = []
     for n in req.melody:
         if n.lower() == 'rest':
@@ -480,12 +520,10 @@ def harmonize_melody_endpoint(req: HarmonizeRequest):
              path.pop()
              return
 
-        # 1. Search the corpus for chords that have this exact Soprano note
         matching_chords = [c for c in historical_corpus_chords if c[0] == target_soprano]
         random.shuffle(matching_chords)
         
         for cand in matching_chords:
-            # 2. Suitability Measure: Ensure the chosen corpus chord transitions legally from the previous chord
             if depth == 0 or is_valid_transition(path[-1], cand, req.tonic_pc):
                  path.append(cand)
                  dfs_harm(depth + 1, path)
@@ -572,16 +610,12 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
         
         background_tasks.add_task(delayed_cleanup, temp_filename, 15)
         
-        # Format the match for RAG (Contextual Seeding) into the workspace
         rag_satb = []
         if is_chord:
-            # Vertical Search: Pad or truncate the matched chord to exactly 4 voices
             padded = match["raw_notes"][:4] + [-1] * max(0, 4 - len(match["raw_notes"]))
-            # Reverse so it maps Soprano (highest) to Bass (lowest)
             padded = sorted(padded, reverse=True)
             rag_satb.append(midi_tuple_to_satb(padded))
         else:
-            # Horizontal Search: Place the melody in the Soprano, rests in the other voices
             for note_val in match["raw_notes"]:
                 rag_satb.append(midi_tuple_to_satb([note_val, -1, -1, -1]))
 
@@ -590,7 +624,7 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
             "composer": match["composer"],
             "score": match["score"],
             "midi_url": f"/{temp_filename}",
-            "rag_satb": rag_satb # Send the parsed RAG seed to the frontend
+            "rag_satb": rag_satb 
         })
     return {
         "status": "success", 

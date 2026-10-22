@@ -289,6 +289,12 @@
 
         <button id="extendBtn">AI, Continue This Sequence</button>
         <div id="extendStatus" class="status"></div>
+        
+        <!-- NEW: XAI Insight Panel -->
+        <div id="xaiPanel" style="display: none; background: #e0f2fe; border: 1px solid #7dd3fc; padding: 15px; border-radius: 6px; font-size: 0.85rem; margin-top: 15px;">
+            <strong style="color: #0369a1;">🧠 XAI Insight: AI Decision Log</strong>
+            <ul id="xaiList" style="margin: 5px 0 0 0; padding-left: 20px; color: #0c4a6e;"></ul>
+        </div>
 
         <div id="collab-player-container">
             <midi-visualizer type="staff" id="collabVisualizer"></midi-visualizer>
@@ -576,6 +582,13 @@
             status.innerText = "AI is analyzing voices and composing...";
 
             try {
+                // Safely reset the XAI panel structure before fetching
+                document.getElementById('xaiPanel').style.display = "none";
+                document.getElementById('xaiPanel').innerHTML = `
+                    <strong style="color: #0369a1;">🧠 XAI Insight: AI Decision Log</strong>
+                    <ul id="xaiList" style="margin: 5px 0 0 0; padding-left: 20px; color: #0c4a6e;"></ul>
+                `;
+                
                 const response = await fetch('/extend', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -613,7 +626,50 @@
 
                 if (!response.ok) {
                     const errData = await response.json();
-                    throw new Error(errData.detail || "API Error.");
+                    
+                    // NEW: Parse the enriched XAI Diagnosis & Solution
+                    let errorText = errData.detail;
+                    let solutionText = "Review the classical voice-leading rules and adjust your manual input.";
+                    
+                    if (typeof errData.detail === 'object' && errData.detail !== null) {
+                        errorText = errData.detail.error || "Rule violation detected.";
+                        solutionText = errData.detail.solution || solutionText;
+                    }
+
+                    // Render the educational XAI feedback
+                    document.getElementById('xaiPanel').style.display = "block";
+                    document.getElementById('xaiPanel').style.background = "#fee2e2";
+                    document.getElementById('xaiPanel').style.borderColor = "#fca5a5";
+                    document.getElementById('xaiPanel').innerHTML = `
+                        <strong style="color: #991b1b;">⚠️ XAI: Human Rule Violation Detected</strong>
+                        <p style="margin: 8px 0 0 0; color: #7f1d1d;"><strong>Diagnosis:</strong> ${errorText}</p>
+                        <p style="margin: 8px 0 0 0; color: #166534; background: #dcfce7; padding: 8px; border-radius: 4px; border: 1px solid #bbf7d0;">
+                            <strong>💡 Suggested Solution:</strong> ${solutionText}
+                        </p>
+                    `;
+                    throw new Error("Validation failed.");
+                }
+                
+                // NEW: Parse XAI Stats
+                const xaiHeader = response.headers.get("X-XAI-Stats");
+                if (xaiHeader) {
+                    const stats = JSON.parse(xaiHeader);
+                    // Reset inner HTML securely
+                    document.getElementById('xaiPanel').innerHTML = `
+                        <strong style="color: #0369a1;">🧠 XAI Insight: AI Decision Log</strong>
+                        <ul id="xaiList" style="margin: 5px 0 0 0; padding-left: 20px; color: #0c4a6e;"></ul>
+                    `;
+                    const xaiList = document.getElementById('xaiList');
+                    xaiList.innerHTML = `
+                        <li><strong>Evaluated:</strong> ${stats.total_evaluated} chord combinations</li>
+                        <li><strong>Rejected (Voice-Leading/Parallel 5ths):</strong> ${stats.voice_leading_rejections}</li>
+                        <li><strong>Rejected (Tessitura/Range):</strong> ${stats.out_of_range}</li>
+                        <li><strong>Rejected (Forced Cadence):</strong> ${stats.cadence_violations}</li>
+                        <li><strong>Accepted valid branches:</strong> ${stats.accepted_branches}</li>
+                    `;
+                    document.getElementById('xaiPanel').style.display = "block";
+                    document.getElementById('xaiPanel').style.background = "#e0f2fe";
+                    document.getElementById('xaiPanel').style.borderColor = "#7dd3fc";
                 }
 
                 const generatedChordsHeader = response.headers.get("X-Generated-Chords");
