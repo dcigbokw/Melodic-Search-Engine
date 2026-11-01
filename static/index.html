@@ -6,6 +6,7 @@
     <title>Bach Generative AI Engine</title>
     
     <script src="https://cdn.jsdelivr.net/combine/npm/tone@14.7.58,npm/@magenta/music@1.23.1/es6/core.js,npm/focus-visible@5,npm/html-midi-player@1.5.0"></script>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     
     <style>
         :root { --primary: #2563eb; --bg: #f8fafc; --text: #0f172a; --card: #ffffff; }
@@ -39,6 +40,12 @@
         .slider-label { width: 65px; flex-shrink: 0; }
         .slider-input { flex: 1; margin: 0 8px; min-width: 0; }
         .slider-val { width: 35px; text-align: right; font-weight: bold; flex-shrink: 0; }
+        
+        /* Legend for Context-Aware Vis */
+        .color-legend span { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; border: 1px solid #cbd5e1; }
+        
+        /* Vis Network Container */
+        #markovNetwork { width: 100%; height: 350px; border: 1px solid #cbd5e1; border-radius: 6px; display: none; margin-top: 15px; background: #f8fafc; }
     </style>
 </head>
 <body>
@@ -118,7 +125,7 @@
     <!-- 2. CO-CREATIVE WORKSPACE SECTION -->
     <div class="card">
         <h2>2. Co-Creative Workspace (SATB)</h2>
-        <p>Build your progression using specific Soprano, Alto, Tenor, and Bass notes. Type "rest" to insert rests.</p>
+        <p>Build your progression using specific Soprano, Alto, Tenor, and Bass notes. Color-coding reveals AI context.</p>
 
         <div style="display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; align-items: flex-start;">
             
@@ -207,7 +214,16 @@
                         <input type="range" id="markovDepth" min="1" max="3" value="1" style="flex: 1;">
                         <span id="val-depth" style="font-weight: bold; font-size: 0.8rem;">1</span>
                     </div>
-                    <small style="font-size: 0.65rem; color: #64748b;">Higher = More historically accurate, Lower = More random</small>
+                    <small style="font-size: 0.65rem; color: #64748b;">Higher = More historically accurate</small>
+                </div>
+
+                <div>
+                    <label style="margin-top: 0; font-size: 0.8rem;">Rule Strictness:</label>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="range" id="ruleStrictness" min="0" max="100" value="100" style="flex: 1;">
+                        <span id="val-strictness" style="font-weight: bold; font-size: 0.8rem;">100%</span>
+                    </div>
+                    <small style="font-size: 0.65rem; color: #64748b;">100% = Strict Classical, 0% = Free/Jazz</small>
                 </div>
 
                 <div>
@@ -225,7 +241,7 @@
                         <input type="range" id="rangeExpansion" min="0" max="12" value="0" style="flex: 1;">
                         <span id="val-range" style="font-weight: bold; font-size: 0.8rem;">+0</span>
                     </div>
-                    <small style="font-size: 0.65rem; color: #64748b;">Expand strict classical tessitura (semitones)</small>
+                    <small style="font-size: 0.65rem; color: #64748b;">Expand strict classical tessitura</small>
                 </div>
                 
                 <div>
@@ -247,7 +263,6 @@
                     </select>
                 </div>
 
-                <!-- Existing Expression Controls -->
                 <div>
                     <label style="margin-top: 0; font-size: 0.8rem;">Tempo (Speed):</label>
                     <select id="tempoSelect" style="width: 100%; font-size: 0.85rem;">
@@ -275,8 +290,19 @@
             </div>
             </div>
         </div>
+        
+        <!-- Context Aware Legend -->
+        <div class="color-legend" style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+            <strong style="font-size: 0.8rem;">AI Context Overlay:</strong>
+            <span style="background: #dbeafe;">Bach</span>
+            <span style="background: #fee2e2;">Beethoven</span>
+            <span style="background: #dcfce7;">Chopin</span>
+            <span style="background: #fef9c3;">Mozart</span>
+            <span style="background: #f3e8ff;">Tchaikovsky</span>
+            <span style="background: #ffedd5;">Handel</span>
+            <span style="background: #ffffff;">Human</span>
+        </div>
 
-        <label>Progression Builder:</label>
         <div id="chordWorkspace" style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 15px; background: #f1f5f9; border-radius: 6px; border: 1px solid #cbd5e1;"></div>
         
         <div style="display: flex; gap: 10px; margin-top: 10px; margin-bottom: 20px;">
@@ -287,10 +313,17 @@
         <label>Blocks for AI to add:</label>
         <input type="number" id="numToAdd" value="4" min="1" max="16" style="width: 100%;"/>
 
-        <button id="extendBtn">AI, Continue This Sequence</button>
+        <!-- Visualize Markov Brain Button -->
+        <div style="display: flex; gap: 10px; margin-top: 15px;">
+            <button id="extendBtn" style="flex: 2;">AI, Continue This Sequence</button>
+            <button id="visualizeBrainBtn" style="flex: 1; background: #10b981;">Visualize Markov Brain</button>
+        </div>
         <div id="extendStatus" class="status"></div>
         
-        <!-- NEW: XAI Insight Panel -->
+        <!-- The Markov Brain Network Container -->
+        <div id="markovNetwork"></div>
+        
+        <!-- XAI Insight Panel -->
         <div id="xaiPanel" style="display: none; background: #e0f2fe; border: 1px solid #7dd3fc; padding: 15px; border-radius: 6px; font-size: 0.85rem; margin-top: 15px;">
             <strong style="color: #0369a1;">🧠 XAI Insight: AI Decision Log</strong>
             <ul id="xaiList" style="margin: 5px 0 0 0; padding-left: 20px; color: #0c4a6e;"></ul>
@@ -433,17 +466,20 @@
     </div>
 
     <script>
+        // COMPOSER COLOR MAP
+        const compColors = {
+            bach: '#dbeafe', beethoven: '#fee2e2', chopin: '#dcfce7', 
+            mozart: '#fef9c3', tchaikovsky: '#f3e8ff', handel: '#ffedd5', human: '#ffffff'
+        };
+
         // --- SLIDER LOGIC ---
         ['bach', 'beethoven', 'chopin', 'mozart', 'tchaikovsky', 'handel'].forEach(comp => {
-            // Update Harmony Sliders
             const hSlider = document.getElementById(`w-${comp}`);
             if (hSlider) {
                 hSlider.addEventListener('input', (e) => {
                     document.getElementById(`val-${comp}`).innerText = `${e.target.value}%`;
                 });
             }
-            
-            // Update Rhythm Sliders
             const rSlider = document.getElementById(`rw-${comp}`);
             if (rSlider) {
                 rSlider.addEventListener('input', (e) => {
@@ -452,7 +488,6 @@
             }
         });
 
-        // --- NEW AI PARAMETER SLIDER LOGIC ---
         document.getElementById('markovDepth').addEventListener('input', (e) => {
             document.getElementById('val-depth').innerText = e.target.value;
         });
@@ -462,6 +497,11 @@
         document.getElementById('rangeExpansion').addEventListener('input', (e) => {
             document.getElementById('val-range').innerText = `+${e.target.value}`;
         });
+        document.getElementById('ruleStrictness').addEventListener('input', (e) => {
+            document.getElementById('val-strictness').innerText = `${e.target.value}%`;
+        });
+        
+        let consecutiveErrors = 0; 
 
        // --- 1. GENERATOR LOGIC ---
         document.getElementById('generateBtn').addEventListener('click', async () => {
@@ -483,7 +523,8 @@
                         tonic_pc: parseInt(document.getElementById('genKeySelect').value),
                         tempo: document.getElementById('genTempo').value,
                         dynamics: document.getElementById('genDynamics').value,
-                        time_signature: document.getElementById('genTimeSig').value
+                        time_signature: document.getElementById('genTimeSig').value,
+                        strictness: parseInt(document.getElementById('ruleStrictness').value) / 100.0
                     })
                 });
 
@@ -506,22 +547,29 @@
         // --- 2. CO-CREATIVE WORKSPACE LOGIC (SATB) ---
         const chordWorkspace = document.getElementById('chordWorkspace');
 
-        function createSATBSlot(s = 'C5', a = 'G4', t = 'E4', b = 'C3', dur = 1.0) {
+        // Accepts bgColor for context-aware styling
+        function createSATBSlot(s = 'C5', a = 'G4', t = 'E4', b = 'C3', dur = 1.0, bgColor = compColors.human) {
             const slot = document.createElement('div');
             slot.className = 'chord-slot';
-            slot.style.cssText = "display: flex; flex-direction: column; gap: 4px; background: white; padding: 10px; border-radius: 6px; border: 1px solid #cbd5e1; align-items: center; width: 80px;";
+            slot.style.cssText = `display: flex; flex-direction: column; gap: 4px; background: ${bgColor}; padding: 10px; border-radius: 6px; border: 1px solid #cbd5e1; align-items: center; width: 80px; transition: background 0.3s;`;
             
-            const inputStyle = "width: 100%; padding: 4px; text-align: center; font-weight: bold; font-size: 0.85rem; border: 1px solid #e2e8f0; border-radius: 4px; box-sizing: border-box;";
+            const inputStyle = "width: 100%; padding: 4px; text-align: center; font-weight: bold; font-size: 0.85rem; border: 1px solid #e2e8f0; border-radius: 4px; box-sizing: border-box; background: rgba(255,255,255,0.7);";
             
             let sInput = `<input type="text" class="voice-s" value="${s}" style="${inputStyle}" title="Soprano">`;
             let aInput = `<input type="text" class="voice-a" value="${a}" style="${inputStyle}" title="Alto">`;
             let tInput = `<input type="text" class="voice-t" value="${t}" style="${inputStyle}" title="Tenor">`;
             let bInput = `<input type="text" class="voice-b" value="${b}" style="${inputStyle}" title="Bass">`;
             
-            let durInput = `<input type="number" class="voice-dur" value="${dur}" step="0.25" min="0.25" max="8" style="${inputStyle} background: #f1f5f9;" title="Duration (Beats)">`;
+            let durInput = `<input type="number" class="voice-dur" value="${dur}" step="0.25" min="0.25" max="8" style="${inputStyle} background: #f8fafc;" title="Duration (Beats)">`;
             let deleteBtn = `<button onclick="this.parentElement.remove()" style="margin-top: 5px; padding: 2px; width: 100%; background: #ef4444; font-size: 0.75rem;">Delete</button>`;
             
             slot.innerHTML = `<span style="font-size: 0.7rem; color: #64748b; margin-bottom: 2px; text-align: center;">SATB<br>Beats</span>` + sInput + aInput + tInput + bInput + durInput + deleteBtn;
+            
+            // Add listener to reset color to human if edited
+            slot.querySelectorAll('input[type="text"]').forEach(input => {
+                input.addEventListener('input', () => { slot.style.background = compColors.human; });
+            });
+            
             chordWorkspace.appendChild(slot);
         }
 
@@ -549,11 +597,7 @@
         document.getElementById('addChordBtn').addEventListener('click', () => createSATBSlot('rest', 'rest', 'rest', 'rest', 1.0));
         document.getElementById('addMeterBtn').addEventListener('click', () => createMeterSlot());
 
-        document.getElementById('extendBtn').addEventListener('click', async () => {
-            const btn = document.getElementById('extendBtn');
-            const status = document.getElementById('extendStatus');
-            const container = document.getElementById('collab-player-container');
-            
+        function getWorkspaceData() {
             const currentChords = [];
             const currentDurations = [];
             const meterChanges = {};
@@ -573,16 +617,77 @@
                     let durVal = parseFloat(slot.querySelector('.voice-dur').value);
                     if (isNaN(durVal)) durVal = 1.0;
                     currentDurations.push(durVal);
-                    
                     chordCounter++;
                 }
             });
+            return { currentChords, currentDurations, meterChanges };
+        }
+
+        // --- MARKOV VISUALIZER LOGIC ---
+        let network = null;
+
+        async function updateMarkovBrain() {
+            const container = document.getElementById('markovNetwork');
+            const data = getWorkspaceData();
+            container.style.display = "block";
+            
+            try {
+                const response = await fetch('/markov-tree', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        current_chords: data.currentChords,
+                        composer_weights: {
+                            bach: parseInt(document.getElementById('w-bach').value),
+                            beethoven: parseInt(document.getElementById('w-beethoven').value),
+                            chopin: parseInt(document.getElementById('w-chopin').value),
+                            mozart: parseInt(document.getElementById('w-mozart').value),
+                            tchaikovsky: parseInt(document.getElementById('w-tchaikovsky').value),
+                            handel: parseInt(document.getElementById('w-handel').value)
+                        },
+                        markov_order: parseInt(document.getElementById('markovDepth').value)
+                    })
+                });
+                
+                if (!response.ok) throw new Error("Could not fetch tree data.");
+                const graphData = await response.json();
+                
+                const visData = {
+                    nodes: new vis.DataSet(graphData.nodes),
+                    edges: new vis.DataSet(graphData.edges)
+                };
+                
+                const options = {
+                    layout: { hierarchical: { direction: "UD", sortMethod: "directed" } },
+                    physics: { enabled: true, hierarchicalRepulsion: { nodeDistance: 150 } },
+                    edges: { smooth: true, color: { color: '#94a3b8', highlight: '#3b82f6' } }
+                };
+                
+                if(network !== null) network.destroy();
+                network = new vis.Network(container, visData, options);
+            } catch(e) {
+                console.error("Error building Markov tree: " + e.message);
+            }
+        }
+
+        document.getElementById('visualizeBrainBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('visualizeBrainBtn');
+            btn.innerText = "Processing...";
+            await updateMarkovBrain();
+            btn.innerText = "Visualize Markov Brain";
+        });
+
+        // --- EXTEND (AI) LOGIC ---
+        document.getElementById('extendBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('extendBtn');
+            const status = document.getElementById('extendStatus');
+            const container = document.getElementById('collab-player-container');
+            const data = getWorkspaceData();
             
             btn.disabled = true;
             status.innerText = "AI is analyzing voices and composing...";
 
             try {
-                // Safely reset the XAI panel structure before fetching
                 document.getElementById('xaiPanel').style.display = "none";
                 document.getElementById('xaiPanel').innerHTML = `
                     <strong style="color: #0369a1;">🧠 XAI Insight: AI Decision Log</strong>
@@ -593,8 +698,8 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
-                        current_chords: currentChords, 
-                        current_durations: currentDurations,
+                        current_chords: data.currentChords, 
+                        current_durations: data.currentDurations,
                         num_to_add: parseInt(document.getElementById('numToAdd').value),
                         composer_weights: {
                             bach: parseInt(document.getElementById('w-bach').value),
@@ -620,14 +725,15 @@
                         range_expansion: parseInt(document.getElementById('rangeExpansion').value),
                         tonic_pc: parseInt(document.getElementById('keySelect').value),
                         time_signature: document.getElementById('timeSig').value,
-                        meter_changes: meterChanges
+                        meter_changes: data.meterChanges,
+                        strictness: parseInt(document.getElementById('ruleStrictness').value) / 100.0
                     })
                 });
 
                 if (!response.ok) {
+                    consecutiveErrors++;
                     const errData = await response.json();
                     
-                    // NEW: Parse the enriched XAI Diagnosis & Solution
                     let errorText = errData.detail;
                     let solutionText = "Review the classical voice-leading rules and adjust your manual input.";
                     
@@ -636,7 +742,13 @@
                         solutionText = errData.detail.solution || solutionText;
                     }
 
-                    // Render the educational XAI feedback
+                    let adaptiveTip = "";
+                    if (consecutiveErrors >= 2) {
+                        adaptiveTip = `<p style="margin: 8px 0 0 0; color: #854d0e; background: #fef08a; padding: 8px; border-radius: 4px; border: 1px solid #fde047;">
+                            <strong>💡 Adaptive Tip:</strong> Writing modern or jazz chords? Try lowering the <strong>Rule Strictness</strong> slider above to bypass these classical restrictions!
+                        </p>`;
+                    }
+
                     document.getElementById('xaiPanel').style.display = "block";
                     document.getElementById('xaiPanel').style.background = "#fee2e2";
                     document.getElementById('xaiPanel').style.borderColor = "#fca5a5";
@@ -646,15 +758,16 @@
                         <p style="margin: 8px 0 0 0; color: #166534; background: #dcfce7; padding: 8px; border-radius: 4px; border: 1px solid #bbf7d0;">
                             <strong>💡 Suggested Solution:</strong> ${solutionText}
                         </p>
+                        ${adaptiveTip}
                     `;
                     throw new Error("Validation failed.");
                 }
                 
-                // NEW: Parse XAI Stats
+                consecutiveErrors = 0; 
+                
                 const xaiHeader = response.headers.get("X-XAI-Stats");
                 if (xaiHeader) {
                     const stats = JSON.parse(xaiHeader);
-                    // Reset inner HTML securely
                     document.getElementById('xaiPanel').innerHTML = `
                         <strong style="color: #0369a1;">🧠 XAI Insight: AI Decision Log</strong>
                         <ul id="xaiList" style="margin: 5px 0 0 0; padding-left: 20px; color: #0c4a6e;"></ul>
@@ -674,18 +787,16 @@
 
                 const generatedChordsHeader = response.headers.get("X-Generated-Chords");
                 const generatedRhythmsHeader = response.headers.get("X-Generated-Rhythms");
+                const composerSourcesHeader = response.headers.get("X-Composer-Sources");
                 
                 if (generatedChordsHeader) {
                     const parsedChords = JSON.parse(generatedChordsHeader);
-                    let parsedRhythms = [];
-                    if (generatedRhythmsHeader) {
-                        parsedRhythms = JSON.parse(generatedRhythmsHeader);
-                    } else {
-                        parsedRhythms = Array(parsedChords.length).fill(1.0);
-                    }
+                    let parsedRhythms = generatedRhythmsHeader ? JSON.parse(generatedRhythmsHeader) : Array(parsedChords.length).fill(1.0);
+                    let parsedSources = composerSourcesHeader ? JSON.parse(composerSourcesHeader) : Array(parsedChords.length).fill('bach');
                     
                     parsedChords.forEach((voices, idx) => {
-                        createSATBSlot(voices[0], voices[1], voices[2], voices[3], parsedRhythms[idx]);
+                        const compColor = compColors[parsedSources[idx]] || compColors.human;
+                        createSATBSlot(voices[0], voices[1], voices[2], voices[3], parsedRhythms[idx], compColor);
                     });
                 }
 
@@ -697,6 +808,10 @@
                 
                 status.innerText = "Extension successful! Edit the individual voices and continue.";
                 container.style.display = "block";
+                
+                // AUTO-REFRESH THE MARKOV BRAIN
+                await updateMarkovBrain();
+
             } catch (error) {
                 status.innerText = "Error: " + error.message;
             } finally {
@@ -762,7 +877,6 @@
                     `;
                     resultsContainer.appendChild(card);
                     
-                    // Horizontal RAG Injection & Harmonize Prompt
                     document.getElementById(ragBtnId).addEventListener('click', async () => {
                         const workspace = document.getElementById('chordWorkspace');
                         const doHarmonize = confirm("Do you want to search the corpus to automatically harmonize this melody?");
@@ -790,18 +904,18 @@
                                 if (response.ok) {
                                     const data = await response.json();
                                     data.chords.forEach(satb => {
-                                        createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0);
+                                        createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0, compColors.human);
                                     });
                                 } else {
                                     alert("Could not find a strict rule-compliant harmonization. Appending unharmonized melody.");
-                                    match.rag_satb.forEach(satb => createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0));
+                                    match.rag_satb.forEach(satb => createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0, compColors.human));
                                 }
                             } catch(e) {
-                                match.rag_satb.forEach(satb => createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0));
+                                match.rag_satb.forEach(satb => createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0, compColors.human));
                             }
                         } else {
                             match.rag_satb.forEach(satb => {
-                                createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0);
+                                createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0, compColors.human);
                             });
                         }
                         
@@ -875,11 +989,10 @@
                     `;
                     resultsContainer.appendChild(card);
                     
-                    // Vertical RAG Injection Logic (Appends directly)
                     document.getElementById(ragBtnId).addEventListener('click', () => {
                         const workspace = document.getElementById('chordWorkspace');
                         match.rag_satb.forEach(satb => {
-                            createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0);
+                            createSATBSlot(satb[0], satb[1], satb[2], satb[3], 1.0, compColors.human);
                         });
                         workspace.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     });

@@ -58,6 +58,7 @@ class GenerateRequest(BaseModel):
     tempo: str = "andante"
     dynamics: str = "mf"
     time_signature: str = "4/4"
+    strictness: float = 1.0  
 
 def interpolate_matrices(matrices_dict, user_weights, order_key="first_order"):
     total_weight = sum(user_weights.values())
@@ -80,6 +81,33 @@ def interpolate_matrices(matrices_dict, user_weights, order_key="first_order"):
                 blended_matrix[state][next_state] += weighted_prob
                 
     return blended_matrix
+
+def get_dominant_composer(path, next_state, comp_weights, markov_order):
+    best_comp = "bach"
+    highest_prob = -1
+    
+    for comp, w in comp_weights.items():
+        if w <= 0: continue
+        prob = 0
+        
+        m1 = all_corpora.get(comp, {}).get("first_order", {})
+        m2 = all_corpora.get(comp, {}).get("second_order", {})
+        m3 = all_corpora.get(comp, {}).get("third_order", {})
+        
+        if markov_order == 3 and len(path) >= 3:
+            prob = m3.get((path[-3], path[-2], path[-1]), {}).get(next_state, 0)
+        if prob == 0 and markov_order >= 2 and len(path) >= 2:
+            prob = m2.get((path[-2], path[-1]), {}).get(next_state, 0)
+        if prob == 0:
+            prob = m1.get(path[-1], {}).get(next_state, 0)
+            
+        # Weight by the user's requested slider value for context tracking
+        weighted_prob = prob * w
+        if weighted_prob > highest_prob:
+            highest_prob = weighted_prob
+            best_comp = comp
+            
+    return best_comp
 
 @app.post("/generate")
 def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
@@ -146,15 +174,17 @@ def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
             if out_of_range: continue
 
             if cand_state[0] != -1 and cadence_pref != "none":
-                is_penultimate = (current_depth == req.num_chords - 2)
-                is_ultimate = (current_depth == req.num_chords - 1)
+                cand_index = len(path) 
+                is_penultimate = (cand_index == req.num_chords - 2)
+                is_ultimate = (cand_index == req.num_chords - 1)
                 bass_pc = cand_state[3] % 12
                 
                 if cadence_pref == "authentic":
                     if is_penultimate and bass_pc != (req.tonic_pc + 7) % 12: continue
                     if is_ultimate and bass_pc != req.tonic_pc: continue
             
-            if is_valid_transition(curr_state, cand_state, req.tonic_pc):
+            passes_rules = is_valid_transition(curr_state, cand_state, req.tonic_pc)
+            if passes_rules or random.random() > req.strictness:
                 h = hash(tuple(path + [cand_state]))
                 if h in visited: continue
                 visited.add(h)
@@ -221,9 +251,6 @@ def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
         midi_data = f.read()
     return Response(content=midi_data, media_type="audio/midi")
 
-# ==========================================
-# 2. SATB TRANSLATOR HELPERS
-# ==========================================
 def midi_tuple_to_satb(midi_tuple):
     satb_strings = []
     for midi_val in midi_tuple:
@@ -246,9 +273,105 @@ def satb_to_midi_tuple(satb_list):
                 p = pitch.Pitch(note_str)
                 midi_vals.append(p.midi)
             except Exception:
-                midi_vals.append(60) 
+                raise ValueError(f"Invalid note format: '{note_str}'. Please use scientific pitch notation (e.g., 'C4', 'F#3').") 
     return tuple(midi_vals)
 
+# ==========================================
+# 2. THE MARKOV STATE MACHINE VISUALIZER ENDPOINT
+# ==========================================
+class MarkovTreeRequest(BaseModel):
+    current_chords: List[List[str]]
+    composer_weights: dict
+    markov_order: int
+
+@app.post("/markov-tree")
+def get_markov_tree(req: MarkovTreeRequest):
+    matrix_1st = interpolate_matrices(all_corpora, req.composer_weights, "first_order")
+    matrix_2nd = interpolate_matrices(all_corpora, req.composer_weights, "second_order")
+    matrix_3rd = interpolate_matrices(all_corpora, req.composer_weights, "third_order")
+    
+    try:
+        human_sequence = [satb_to_midi_tuple(block) for block in req.current_chords]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+        
+    path = human_sequence
+    opts_dict = {}
+    target_order = req.markov_order
+    
+    while target_order >= 1 and not opts_dict:
+        if target_order == 3 and len(path) >= 3:
+            opts_dict = matrix_3rd.get((path[-3], path[-2], path[-1]), {})
+        elif target_order == 2 and len(path) >= 2:
+            opts_dict = matrix_2nd.get((path[-2], path[-1]), {})
+        elif target_order == 1 and len(path) >= 1:
+            opts_dict = matrix_1st.get(path[-1], {})
+        target_order -= 1
+        
+    valid_keys = [k for k in opts_dict.keys() if isinstance(k, tuple) and k[0] != -1]
+    sorted_opts = sorted(valid_keys, key=lambda k: opts_dict[k], reverse=True)[:8]
+    
+    nodes = []
+    edges = []
+    
+    if len(path) == 0:
+        return {"nodes": [], "edges": []}
+        
+    # 1. BUILD THE HISTORICAL PATH
+    for i, state in enumerate(path):
+        satb = midi_tuple_to_satb(state)
+        node_id = f"hist_{i}"
+        is_current = (i == len(path) - 1)
+        
+        nodes.append({
+            "id": node_id,
+            "label": f"[{' '.join(satb)}]",
+            "color": "#fef08a" if is_current else "#f8fafc",
+            "shape": "box",
+            "font": {"size": 16, "bold": is_current},
+            "title": "Current Top Chord" if is_current else f"History Step {i+1}"
+        })
+        
+        if i > 0:
+            edges.append({
+                "from": f"hist_{i-1}",
+                "to": node_id,
+                "label": "past",
+                "arrows": "to",
+                "color": {"color": "#cbd5e1"}
+            })
+            
+    # 2. BRANCH INTO THE FUTURE
+    current_node_id = f"hist_{len(path)-1}"
+    color_map = {
+        "bach": "#dbeafe", "beethoven": "#fee2e2", "chopin": "#dcfce7", 
+        "mozart": "#fef9c3", "tchaikovsky": "#f3e8ff", "handel": "#ffedd5"
+    }
+    
+    for idx, cand in enumerate(sorted_opts):
+        cand_state = cand[-1] if isinstance(cand, tuple) and isinstance(cand[0], tuple) else cand
+        cand_satb = midi_tuple_to_satb(cand_state)
+        node_id = f"cand_{idx}"
+        prob = opts_dict[cand]
+        
+        dom_comp = get_dominant_composer(path, cand_state, req.composer_weights, req.markov_order)
+        
+        nodes.append({
+            "id": node_id, 
+            "label": f"[{' '.join(cand_satb)}]", 
+            "color": color_map.get(dom_comp, "#e2e8f0"), 
+            "shape": "box",
+            "title": f"Source: {dom_comp.title()}"
+        })
+        edges.append({
+            "from": current_node_id, 
+            "to": node_id, 
+            "label": f"{prob*100:.1f}%", 
+            "arrows": "to", 
+            "font": {"align": "top"}
+        })
+        
+    return {"nodes": nodes, "edges": edges}
 # ==========================================
 # 3. THE CO-CREATIVE EXTEND ENDPOINT
 # ==========================================
@@ -267,6 +390,7 @@ class ExtendRequest(BaseModel):
     tonic_pc: int = 0
     time_signature: str = "4/4"
     meter_changes: dict = {}
+    strictness: float = 1.0  
 
 @app.post("/extend")
 def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
@@ -280,13 +404,16 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
     if len(req.current_chords) < 1:
         raise HTTPException(status_code=400, detail="Provide at least 1 SATB block.")
 
-    human_sequence = [satb_to_midi_tuple(block) for block in req.current_chords]
+    try:
+        human_sequence = [satb_to_midi_tuple(block) for block in req.current_chords]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     
     human_rhythms = req.current_durations if len(req.current_durations) == len(human_sequence) else [1.0] * len(human_sequence)
     
     is_clean, error_msg = audit_human_sequence(human_sequence, is_valid_transition)
-    if not is_clean:
-        # XAI Enrichment - Map classical errors to actionable solutions
+    
+    if not is_clean and req.strictness >= 0.8:
         msg_lower = error_msg.lower()
         solution = "Try adjusting the voices to move smoothly by step, keeping common tones where possible, while the Bass provides the foundation."
         
@@ -303,14 +430,12 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
         elif "leading" in msg_lower and "resolve" in msg_lower:
             solution = "The leading tone (the 7th degree of the scale) in an outer voice must resolve UP to the tonic. Adjust the destination note."
             
-        # Pass a structured JSON dictionary back to the UI
         raise HTTPException(status_code=400, detail={"error": error_msg, "solution": solution})
     
     current_state = human_sequence[-1]
     fallback_options = [c for c in matrix_1st.keys() if isinstance(c, tuple) and c[0] != -1]
     successful_drafts = [] 
     
-    # Initialize XAI Tracking Stats
     xai_stats = {
         "total_evaluated": 0,
         "out_of_range": 0,
@@ -322,8 +447,7 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
     RANGES = {0: (60, 81), 1: (53, 74), 2: (48, 69), 3: (40, 62)}
     
     def dfs_extend(path, visited):
-        if len(successful_drafts) >= 5:
-            return
+        if len(successful_drafts) >= 5: return
             
         current_depth = len(path) - len(human_sequence) 
         
@@ -356,12 +480,11 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
             opts.extend(random.sample(fallback_options, min(20, len(fallback_options))))
         
         for cand in opts:
-            xai_stats["total_evaluated"] += 1 # XAI: Track total branches
+            xai_stats["total_evaluated"] += 1 
             
             cand_state = cand[-1] if isinstance(cand, tuple) and isinstance(cand[0], tuple) else cand
             curr_state = path[-1]
             
-            # XAI: Range Checks
             out_of_range = False
             if cand_state[0] != -1:
                 for v in range(4):
@@ -373,11 +496,11 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
                 xai_stats["out_of_range"] += 1
                 continue
 
-            # XAI: Cadence Checks
             cadence_failed = False
             if cand_state[0] != -1 and req.cadence_pref != "none":
-                is_penultimate = (current_depth == req.num_to_add - 1)
-                is_ultimate = (current_depth == req.num_to_add)
+                cand_index_in_ext = len(path) - len(human_sequence)
+                is_penultimate = (cand_index_in_ext == req.num_to_add - 2)
+                is_ultimate = (cand_index_in_ext == req.num_to_add - 1)
                 bass_pc = cand_state[3] % 12
                 
                 if req.cadence_pref == "authentic":
@@ -393,13 +516,11 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
                 xai_stats["cadence_violations"] += 1
                 continue
 
-            # XAI: Classical Voice-Leading Rules Check
-            if is_valid_transition(curr_state, cand_state, req.tonic_pc):
+            passes_rules = is_valid_transition(curr_state, cand_state, req.tonic_pc)
+            if passes_rules or random.random() > req.strictness:
                 h = hash(tuple(path + [cand_state]))
-                if h in visited:
-                    continue
+                if h in visited: continue
                 visited.add(h)
-                
                 xai_stats["accepted_branches"] += 1
                 path.append(cand_state)
                 dfs_extend(path, visited)
@@ -423,9 +544,16 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
         ai_extension = [tuple(n + 4 if n != -1 else -1 for n in current_state)] * req.num_to_add
             
     full_song_tuples = human_sequence + ai_extension
-    
     ai_rhythms = generate_rhythms(num_chords=len(ai_extension), rhythm_weights=req.rhythm_weights)
     full_rhythms = human_rhythms + ai_rhythms
+    
+    # Context-Aware Visualization: Calculate which composer produced each AI state
+    composer_sources = []
+    path_trace = human_sequence.copy()
+    for state in ai_extension:
+        comp = get_dominant_composer(path_trace, state, req.composer_weights, req.markov_order)
+        composer_sources.append(comp)
+        path_trace.append(state)
     
     tempo_map = {"adagio": 60, "andante": 90, "allegro": 130}
     velocity_map = {"piano": 40, "mf": 75, "forte": 110}
@@ -468,14 +596,13 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
     mf.close()
     
     background_tasks.add_task(delayed_cleanup, temp_filename, 15)
-    
     ai_song_strings = [midi_tuple_to_satb(c) for c in ai_extension]
     
-    # Send XAI log to the frontend
     headers = {
         "X-Generated-Chords": json.dumps(ai_song_strings),
         "X-Generated-Rhythms": json.dumps(ai_rhythms),
-        "X-XAI-Stats": json.dumps(xai_stats)
+        "X-XAI-Stats": json.dumps(xai_stats),
+        "X-Composer-Sources": json.dumps(composer_sources)
     }
     
     with open(temp_filename, "rb") as f:
