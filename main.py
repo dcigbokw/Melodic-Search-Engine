@@ -60,17 +60,17 @@ class GenerateRequest(BaseModel):
     time_signature: str = "4/4"
     strictness: float = 1.0  
 
-def interpolate_matrices(matrices_dict, user_weights, order_key="first_order"):
+def interpolate_matrices(matrices_dict, user_weights, order_key="first_order", split="train"):
     total_weight = sum(user_weights.values())
     if total_weight <= 0:
-        return matrices_dict.get("bach", {}).get(order_key, {})
+        return matrices_dict.get("bach", {}).get(split, {}).get(order_key, {})
         
     normalized_weights = {k: v / total_weight for k, v in user_weights.items()}
     blended_matrix = {}
     
     for composer, comp_weight in normalized_weights.items():
         if comp_weight == 0: continue
-        matrix = matrices_dict.get(composer, {}).get(order_key, {})
+        matrix = matrices_dict.get(composer, {}).get(split, {}).get(order_key, {})
         for state, transitions in matrix.items():
             if state not in blended_matrix:
                 blended_matrix[state] = {}
@@ -80,9 +80,14 @@ def interpolate_matrices(matrices_dict, user_weights, order_key="first_order"):
                     blended_matrix[state][next_state] = 0.0
                 blended_matrix[state][next_state] += weighted_prob
                 
+    for state, transitions in blended_matrix.items():
+        row_sum = sum(transitions.values())
+        if row_sum > 0:
+            blended_matrix[state] = {k: v / row_sum for k, v in transitions.items()}
+                
     return blended_matrix
 
-def get_dominant_composer(path, next_state, comp_weights, markov_order):
+def get_dominant_composer(path, next_state, comp_weights, markov_order, split="train"):
     best_comp = "bach"
     highest_prob = -1
     
@@ -90,9 +95,9 @@ def get_dominant_composer(path, next_state, comp_weights, markov_order):
         if w <= 0: continue
         prob = 0
         
-        m1 = all_corpora.get(comp, {}).get("first_order", {})
-        m2 = all_corpora.get(comp, {}).get("second_order", {})
-        m3 = all_corpora.get(comp, {}).get("third_order", {})
+        m1 = all_corpora.get(comp, {}).get(split, {}).get("first_order", {})
+        m2 = all_corpora.get(comp, {}).get(split, {}).get("second_order", {})
+        m3 = all_corpora.get(comp, {}).get(split, {}).get("third_order", {})
         
         if markov_order == 3 and len(path) >= 3:
             prob = m3.get((path[-3], path[-2], path[-1]), {}).get(next_state, 0)
@@ -541,7 +546,10 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
                 
         ai_extension = best_draft[len(human_sequence):] 
     else:
-        ai_extension = [tuple(n + 4 if n != -1 else -1 for n in current_state)] * req.num_to_add
+        raise HTTPException(
+            status_code=500, 
+            detail="The AI engine exhausted all search branches and failed to find a rule-compliant continuation for this context. Try relaxing strictness or altering the final human chord."
+        )
             
     full_song_tuples = human_sequence + ai_extension
     ai_rhythms = generate_rhythms(num_chords=len(ai_extension), rhythm_weights=req.rhythm_weights)

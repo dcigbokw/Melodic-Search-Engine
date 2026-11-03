@@ -16,12 +16,11 @@ transition_matrix_2nd_order = {}
 try:
     with open(MATRIX_FILE, 'rb') as f:
         all_corpora = pickle.load(f)
-        # Default fallback to Bach for your basic /generate endpoint
-        transition_matrix = all_corpora.get("bach", {}).get("first_order", {})
-        transition_matrix_2nd_order = all_corpora.get("bach", {}).get("second_order", {})
+        # Point the generator purely to the "train" set
+        transition_matrix = all_corpora.get("bach", {}).get("train", {}).get("first_order", {})
+        transition_matrix_2nd_order = all_corpora.get("bach", {}).get("train", {}).get("second_order", {})
 except FileNotFoundError:
     print(f"WARNING: {MATRIX_FILE} not found. (Safe to ignore if running mock tests!)")
-
 def is_valid_transition(chord_a, chord_b, tonic_pc=0):
     """
     Acts as the Evaluator. Takes two full chords and ensures moving 
