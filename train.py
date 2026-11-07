@@ -62,7 +62,8 @@ def process_bundles(bundles):
             matrix[state] = {k: v / total for k, v in nxt_dict.items()}
         return matrix
 
-    return to_prob(counts_1), to_prob(counts_2), to_prob(counts_3), raw_sequences
+    # Return normalized probabilities AND raw counts for accurate NLL weighting
+    return to_prob(counts_1), to_prob(counts_2), to_prob(counts_3), raw_sequences, counts_1, counts_2, counts_3
 
 def build_multi_matrices():
     composers = ['bach', 'beethoven', 'chopin', 'mozart', 'tchaikovsky', 'handel']
@@ -107,9 +108,10 @@ def build_multi_matrices():
                 "third_order": eval_matrices[2]
             },
             "test": {
-                "first_order": test_matrices[0],
-                "second_order": test_matrices[1],
-                "third_order": test_matrices[2]
+                # Use raw counts (indices 4, 5, 6) for accurate NLL weighting
+                "first_order": test_matrices[4],
+                "second_order": test_matrices[5],
+                "third_order": test_matrices[6]
             }
         }
         

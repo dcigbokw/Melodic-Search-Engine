@@ -7,8 +7,10 @@ try:
     with open(INDEX_FILE, 'rb') as f:
         data = pickle.load(f)
         database = data.get("database", {})
+        inverted_index = data.get("inverted_index", {})
 except FileNotFoundError:
     database = {}
+    inverted_index = {}
 
 def calculate_levenshtein(q_intervals, t_intervals):
     """Calculates edit distance (insertions, deletions, substitutions)."""
@@ -64,16 +66,30 @@ def advanced_search(query_notes, algorithm="dtw", target_composer="all", max_dis
         target_sequence = calculate_vertical_intervals(query_notes)
         db_key = "vertical_intervals" 
     elif mode == "exact_vertical":
-        target_sequence = sorted(query_notes) # Just sorts the exact pitches bottom-to-top
+        target_sequence = sorted(query_notes) # Sorts the exact pitches bottom-to-top
         db_key = "exact_vertical_notes"
     else:
         target_sequence = query_notes
         db_key = "raw_notes"
+        
+    candidate_ids = set()
+    
+    # 2. TRIGRAM RETRIEVAL 
+    if mode == "relative" and len(target_sequence) >= 3:
+        query_trigrams = [tuple(target_sequence[i:i+3]) for i in range(len(target_sequence)-2)]
+        for trigram in query_trigrams:
+            if trigram in inverted_index:
+                candidate_ids.update(inverted_index[trigram])
+    else:
+        # Fallback to full database scan for short queries or unsupported modes
+        candidate_ids = set(database.keys())
     
     results = []
 
-    # 2. Iterate over the values in the loaded dictionary
-    for entry in database.values():
+    # 3. FILTER & SCORE (Only run expensive math on retrieved candidates)
+    for pid in candidate_ids:
+        entry = database[pid]
+        
         # Filter by composer
         if target_composer != "all" and entry.get("composer") != target_composer:
             continue
@@ -82,16 +98,16 @@ def advanced_search(query_notes, algorithm="dtw", target_composer="all", max_dis
         if not db_sequence:
             continue
 
-        # 3. Calculate Distance
+        # Calculate Distance
         if algorithm == "dtw":
             score = calculate_dtw(target_sequence, db_sequence)
         elif algorithm == "levenshtein":
             score = calculate_levenshtein(target_sequence, db_sequence)
         else:
-            # Exact Trigram search fallback
+            # Exact search fallback
             score = 0 if target_sequence == db_sequence else float('inf')
 
-        # 4. Filter by the user's max distance threshold
+        # Filter by the user's max distance threshold
         if score <= max_dist:
             # Intercept vertical searches to only return the single matched chord (Max 4 voices)
             if mode in ["exact_vertical", "relative_vertical"]:
@@ -103,7 +119,7 @@ def advanced_search(query_notes, algorithm="dtw", target_composer="all", max_dis
                 "title": entry.get("title", "Unknown"),
                 "composer": entry.get("composer", "Unknown"),
                 "score": score,
-                "raw_notes": display_notes # Safely overridden
+                "raw_notes": display_notes
             })
 
     # Sort results by closest match (lowest score)
