@@ -240,7 +240,7 @@ def test_process_bundles_matrix_generation(mock_parse):
     mock_score = MagicMock()
     mock_key = MagicMock()
     mock_key.mode = 'major'
-    mock_key.tonic = pitch.Pitch('C')  
+    mock_key.tonic = pitch.Pitch('C')
     mock_score.analyze.return_value = mock_key
     
     mock_score.transpose.return_value = mock_score
@@ -255,7 +255,7 @@ def test_process_bundles_matrix_generation(mock_parse):
     mock_score.chordify.return_value = mock_chordify
     mock_parse.return_value = mock_score
     
-    counts_1, counts_2, counts_3, raw_seqs = process_bundles(["fake_path.mxl"])
+    counts_1, counts_2, counts_3, raw_seqs, raw_1, raw_2, raw_3 = process_bundles(["fake_path.mxl"])
     
     expected_chord_1 = (72, 67, 64, 60)
     expected_chord_2 = (74, 69, 65, 62)
