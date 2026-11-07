@@ -102,7 +102,7 @@ The generative engine uses a **Pruned DFS Backtracking** algorithm to tame the e
 
 * **`POST /generate`** – Generates a 4-part chorale and returns a playable MIDI file.
 * **`POST /extend`** – Co-creative continuation: audits the human's input against the DFS rules, rejects invalid edits with explicit errors, then generates the next sequence in the blended style.
-**`POST /harmonize`** – Top-down harmony generation preserving a user-provided soprano melody line.
+* **`POST /harmonize`** – Top-down harmony generation preserving a user-provided soprano melody line.
 * **`POST /search`** – Horizontal (melodic) and vertical (harmonic) approximate search across the corpus, with composer and distance filters, selectable distance algorithm (Levenshtein / DTW), instrumentation, and playback style.
 
 Notes can be given as scientific pitch notation or raw MIDI integers. A melody needs at least 4 notes so it can be reduced to at least one trigram for the index lookup.
