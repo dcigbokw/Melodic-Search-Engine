@@ -20,11 +20,13 @@ from creativity_metrics import (
     calculate_phrase_memorization,
     calculate_nearest_neighbor_novelty,
     calculate_structural_diversity,
-    evaluate_blend_fidelity
+    evaluate_blend_fidelity,
+    calculate_style_likelihood,
+    calculate_pairwise_diversity
 )
 from train import process_bundles
 from build_index import build_multidimensional_index
-from benchmark import calculate_duration_entropy, check_meter_alignment
+from benchmark import calculate_duration_entropy, check_meter_alignment, calculate_sequence_nll
 
 # ==========================================
 # 1. RULES ENGINE TESTS
@@ -231,6 +233,38 @@ def test_evaluate_blend_fidelity(mock_corpora):
     nll_a, nll_b, nll_mix = evaluate_blend_fidelity(seq, "bach", 50, "chopin", 50, markov_order=2)
     assert math.isclose(nll_mix, -math.log(0.5), rel_tol=1e-5)
 
+@patch.dict("creativity_metrics.all_corpora", {
+    "bach": {
+        "train": {
+            "first_order": {
+                60: {62: 0.9, 64: 0.1}
+            }
+        }
+    }
+}, clear=True)
+def test_calculate_style_likelihood():
+    avg_nll, scored, unseen, probs = calculate_style_likelihood([60, 62], composer="bach", markov_order=1)
+    assert scored == 1
+    assert unseen == 0
+    assert math.isclose(avg_nll, -math.log(0.9))
+    assert len(probs) == 1
+    
+    avg_nll_unseen, _, unseen_count, _ = calculate_style_likelihood([65, 67], composer="bach", markov_order=1)
+    assert unseen_count == 1
+    assert math.isclose(avg_nll_unseen, -math.log(1e-9))
+
+@patch("creativity_metrics.calculate_levenshtein")
+def test_calculate_pairwise_diversity(mock_levenshtein):
+    mock_levenshtein.side_effect = [2, 4, 2]
+    seq1 = [1, 2, 3, 4]  
+    seq2 = [1, 2, 5, 5]  
+    seq3 = [9, 9, 9, 9]  
+    
+    collection = [seq1, seq2, seq3]
+    diversity = calculate_pairwise_diversity(collection)
+    assert math.isclose(diversity, (0.5 + 1.0 + 0.5) / 3)
+    assert calculate_pairwise_diversity([seq1]) == 0.0
+
 # ==========================================
 # 7. TRAINING & INDEXING TESTS 
 # ==========================================
@@ -298,8 +332,8 @@ def test_build_multidimensional_index(mock_get_composer, mock_parse, mock_file, 
     assert "database" in dumped_data
     assert "inverted_index" in dumped_data
     assert 0 in dumped_data["database"]
-    # Ensure the trigram index is actually populated
     assert len(dumped_data["inverted_index"]) > 0
+
 # ==========================================
 # 8. BENCHMARK METRIC HELPERS 
 # ==========================================
@@ -312,6 +346,25 @@ def test_check_meter_alignment():
     assert check_meter_alignment([1.0, 1.0, 1.0, 1.0], beats_per_measure=4.0) == True
     assert check_meter_alignment([1.0, 1.0, 1.0, 1.0, 1.0], beats_per_measure=4.0) == False
     assert check_meter_alignment([1.0, 1.0, 1.0], beats_per_measure=3.0) == True
+
+@patch.dict("benchmark.all_corpora", {
+    "bach": {
+        "train": {
+            "second_order": {
+                (1, 2): {3: 0.8, 4: 0.2}
+            }
+        }
+    }
+}, clear=True)
+def test_calculate_sequence_nll():
+    nll_valid = calculate_sequence_nll([1, 2, 3], "bach", markov_order=2)
+    assert math.isclose(nll_valid, -math.log(0.8))
+    
+    nll_unseen = calculate_sequence_nll([1, 2, 5], "bach", markov_order=2)
+    assert math.isclose(nll_unseen, -math.log(1e-9))
+    
+    nll_short = calculate_sequence_nll([1, 2], "bach", markov_order=2)
+    assert nll_short == float('inf')
 
 # ==========================================
 # 9. FASTAPI ENDPOINT TESTS 

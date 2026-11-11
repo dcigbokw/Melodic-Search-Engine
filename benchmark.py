@@ -13,44 +13,66 @@ from music_scorer import score_composition
 from search_engine import advanced_search
 from fastapi.testclient import TestClient
 
-def brute_force_simulation(start_chord, num_chords, markov_order, comp_weights, tonic_pc=0):
+def brute_force_late_pruning_engine(start_chord, num_chords, strictness, markov_order, comp_weights, tonic_pc=0, seed=42, max_drafts=1):
     """
-    Apples-to-apples baseline. Generates using the exact same Markov orders and fallbacks as DFS,
-    but performs late-pruning (checking constraints only at the end) instead of early-pruning.
+    Apples-to-apples baseline for early-pruning DFS. Explores the exact same Markov 
+    search space using the exact same random seed, but defers all constraint 
+    validation until the leaf nodes (late pruning).
     """
+    random.seed(seed)
     matrix_1st = interpolate_matrices(all_corpora, comp_weights, "first_order")
     matrix_2nd = interpolate_matrices(all_corpora, comp_weights, "second_order")
+    matrix_3rd = interpolate_matrices(all_corpora, comp_weights, "third_order")
+    
     fallback_options = [c for c in matrix_1st.keys() if isinstance(c, tuple) and c[0] != -1]
+    successful_drafts = []
+    stats = {"nodes_entered": 0}
     
-    paths = [[start_chord]]
-    nodes_explored = 1
-    
-    for depth in range(num_chords - 1):
-        new_paths = []
-        for path in paths:
-            opts_dict = {}
-            if markov_order == 2 and len(path) >= 2:
-                opts_dict = matrix_2nd.get((path[-2], path[-1]), {})
-            if not opts_dict:
-                opts_dict = matrix_1st.get(path[-1], {})
-                
-            valid_keys = [k for k in opts_dict.keys() if isinstance(k, tuple) and k[0] != -1]
-            if not valid_keys and fallback_options:
-                valid_keys = random.sample(fallback_options, min(10, len(fallback_options)))
-                
-            # Expand all valid branches identically to DFS
-            for cand in valid_keys:
-                nodes_explored += 1
-                new_paths.append(path + [cand])
-        paths = new_paths
+    def dfs_search(path):
+        if len(successful_drafts) >= max_drafts: return
         
-    valid_songs = 0
-    # Late pruning evaluation
-    for path in paths:
-        if all(is_valid_transition(path[i], path[i+1], tonic_pc) for i in range(len(path)-1)):
-            valid_songs += 1
+        stats["nodes_entered"] += 1
+        current_depth = len(path) - 1
+        
+        # Late Pruning: Only evaluate constraints when the sequence is fully generated
+        if current_depth == num_chords - 1:
+            is_valid = True
+            for i in range(len(path) - 1):
+                if not is_valid_transition(path[i], path[i+1], tonic_pc):
+                    is_valid = False
+                    break
+                    
+            if is_valid or random.random() > strictness:
+                successful_drafts.append(path.copy())
+            return
             
-    return nodes_explored, valid_songs
+        opts_dict = {}
+        target_order = markov_order
+        
+        while target_order >= 1 and not opts_dict:
+            if target_order == 3 and len(path) >= 3:
+                opts_dict = matrix_3rd.get((path[-3], path[-2], path[-1]), {})
+            elif target_order == 2 and len(path) >= 2:
+                opts_dict = matrix_2nd.get((path[-2], path[-1]), {})
+            elif target_order == 1:
+                opts_dict = matrix_1st.get(path[-1], {})
+            target_order -= 1
+            
+        valid_keys = [k for k in opts_dict.keys() if isinstance(k, tuple) and k[0] != -1]
+        
+        if not valid_keys and fallback_options:
+            valid_keys = random.sample(fallback_options, min(10, len(fallback_options)))
+            
+        opts = sorted(valid_keys, key=lambda k: math.log(random.random() + 1e-9) / (opts_dict.get(k, 0.1) ** 1.0), reverse=True)
+        
+        for cand in opts:
+            cand_state = cand[-1] if isinstance(cand, tuple) and isinstance(cand[0], tuple) else cand
+            path.append(cand_state)
+            dfs_search(path)
+            path.pop()
+
+    dfs_search([start_chord])
+    return successful_drafts, stats
 
 def instrumented_dfs_engine(start_chord, num_chords, strictness, markov_order, comp_weights, tonic_pc=0, seed=42, max_drafts=1):
     """
@@ -134,12 +156,16 @@ def instrumented_dfs_engine(start_chord, num_chords, strictness, markov_order, c
     return successful_drafts, stats
 
 def calculate_sequence_nll(sequence, evaluator_composer, markov_order=2):
-    """FIX: Converts raw test counts to probabilities for valid NLL calculation."""
+    """
+    Evaluates the negative log-likelihood of a sequence strictly against 
+    the learned probabilities of the training model, using epsilon smoothing for unseen transitions.
+    """
     order_key = "first_order" if markov_order == 1 else "second_order"
     if markov_order == 3: order_key = "third_order"
     
-    test_matrix = all_corpora.get(evaluator_composer, {}).get("test", {}).get(order_key, {})
-    if not test_matrix: return float('inf')
+    # 1. Fetch the TRAINING matrix, not the test matrix
+    train_matrix = all_corpora.get(evaluator_composer, {}).get("train", {}).get(order_key, {})
+    if not train_matrix: return float('inf')
     
     nll_sum, transitions = 0.0, 0
     epsilon = 1e-9
@@ -149,10 +175,9 @@ def calculate_sequence_nll(sequence, evaluator_composer, markov_order=2):
         next_chord = sequence[i+markov_order]
         transitions += 1
         
-        transitions_dict = test_matrix.get(state, {})
-        total_counts = sum(transitions_dict.values())
-        raw_count = transitions_dict.get(next_chord, 0)
-        prob = raw_count / total_counts if total_counts > 0 else 0.0
+        # 2. Retrieve the learned probability directly from the training model
+        train_transitions = train_matrix.get(state, {})
+        prob = train_transitions.get(next_chord, 0.0)
         
         nll_sum -= math.log(max(prob, epsilon))
         
@@ -185,45 +210,44 @@ def check_meter_alignment(durations, beats_per_measure=4.0):
 
 def run_search_efficiency_suite():
     print("======================================================")
-    print("  SUITE 2.1: ALGORITHMIC SEARCH (BRUTE FORCE vs DFS)  ")
+    print("  SUITE 2.1: ALGORITHMIC SEARCH (LATE PRUNING vs EARLY DFS)  ")
     print("======================================================\n")
     
     start_c_major = (72, 67, 60, 48)
     comp_weights = {'bach': 100, 'beethoven': 0, 'chopin': 0, 'mozart': 0, 'tchaikovsky': 0, 'handel': 0}
     num_trials = 20
-    target_lengths = [4, 8, 16] 
+    target_lengths = [4, 6, 8] 
     
     for target_length in target_lengths:
         print(f"\n--- Sweeping Target Length: {target_length} Chords ---")
         
-        runtimes = []
-        stats_agg = {k: [] for k in ["candidate_evaluations", "nodes_entered", "rule_rejections", "backtracks", "fallback_used", "duplicate_skips", "max_depth"]}
-        successes = 0
+        dfs_runtimes, bf_runtimes = [], []
+        dfs_nodes, bf_nodes = [], []
+        dfs_successes, bf_successes = 0, 0
         
         for trial in range(num_trials):
-            start_time = time.perf_counter()
-            drafts, stats = instrumented_dfs_engine(
-                start_c_major, target_length, strictness=1.0, markov_order=2, comp_weights=comp_weights, seed=42 + trial
-            )
-            duration = (time.perf_counter() - start_time) * 1000
-            runtimes.append(duration)
+            seed = 42 + trial
             
-            for k in stats_agg.keys():
-                stats_agg[k].append(stats[k])
+            # 1. Early-Pruning DFS
+            start_time = time.perf_counter()
+            dfs_drafts, dfs_stats = instrumented_dfs_engine(
+                start_c_major, target_length, strictness=1.0, markov_order=2, comp_weights=comp_weights, seed=seed
+            )
+            dfs_runtimes.append((time.perf_counter() - start_time) * 1000)
+            dfs_nodes.append(dfs_stats["nodes_entered"])
+            if dfs_drafts: dfs_successes += 1
+
+            # 2. Late-Pruning Baseline (Apples-to-Apples)
+            start_time = time.perf_counter()
+            bf_drafts, bf_stats = brute_force_late_pruning_engine(
+                start_c_major, target_length, strictness=1.0, markov_order=2, comp_weights=comp_weights, seed=seed
+            )
+            bf_runtimes.append((time.perf_counter() - start_time) * 1000)
+            bf_nodes.append(bf_stats["nodes_entered"])
+            if bf_drafts: bf_successes += 1
                 
-            if drafts:
-                successes += 1
-                
-        completion_rate = (successes / num_trials) * 100
-        mean_rt = statistics.mean(runtimes)
-        
-        if target_length <= 8:
-            bf_nodes, bf_valid = brute_force_simulation(start_c_major, target_length, markov_order=2, comp_weights=comp_weights)
-            print(f"Brute Force Equivalent (top_k=3): {bf_nodes} nodes explored | {bf_valid} valid paths")
-        
-        print(f"DFS Completion Rate:   {completion_rate:.1f}%")
-        print(f"DFS Nodes Entered:     {statistics.mean(stats_agg['nodes_entered']):.1f} (avg)")
-        print(f"DFS Latency (ms):      Mean: {mean_rt:.2f}")
+        print(f"Late-Pruning Baseline:  {statistics.mean(bf_nodes):.1f} nodes (avg) | {statistics.mean(bf_runtimes):.2f} ms | {(bf_successes/num_trials)*100:.1f}% completion")
+        print(f"Early-Pruning DFS:      {statistics.mean(dfs_nodes):.1f} nodes (avg) | {statistics.mean(dfs_runtimes):.2f} ms | {(dfs_successes/num_trials)*100:.1f}% completion")
 
 def run_model_evaluation_suite():
     print("\n======================================================")

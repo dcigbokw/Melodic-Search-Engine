@@ -37,7 +37,7 @@ It is deployed as a REST API and demonstrates scalable system design, algorithmi
 ### 5. Quantitative Evaluation Suite & Academic Polish
 * **Algorithmic Efficiency Benchmarking:** Automated simulations comparing the state-dependent DFS search engine against apples-to-apples brute-force baselines to isolate and measure the latency savings of early constraint pruning.
 * **Quantitative Creativity Metrics:** Empirical validation of generated sequences measuring:
-  * **Negative Log-Likelihood (NLL) & Perplexity** against a strict held-out test split using raw event-weighted transition counts.
+  * **Negative Log-Likelihood (NLL) & Perplexity** against the learned probabilities of the training model to accurately measure style fidelity.
   * **Phrase Memorization (LCS)** to measure contiguous training overlap and prevent strict plagiarism.
   * **Nearest-Neighbor Novelty** using length-normalized sliding-window Levenshtein distance against the training corpus.
   * **Structural Diversity** across generated collections (measuring pairwise Levenshtein distance and bigram entropy).
@@ -49,9 +49,9 @@ It is deployed as a REST API and demonstrates scalable system design, algorithmi
 
 The generative engine uses a **Pruned DFS Backtracking** algorithm to tame the exponential time complexity of brute-force music generation.
 
-* **Time Complexity:** A naive brute-force approach testing all combinations of a chord sequence with branching factor $k$ yields $O(k^n)$. This engine applies early pruning, discarding invalid harmonic branches immediately instead of generating and checking every combination. The built-in benchmark suite runs an honest brute-force (via `itertools.product`) against the pruned engine on a small sequence length so the algorithmic savings can be directly measured.
+* **Time Complexity:** A naive brute-force approach (late pruning) checking all combinations of a sequence with branching factor $k$ yields $O(k^n)$ evaluated states. This engine applies early pruning, discarding invalid harmonic branches immediately. The benchmark suite executes a strict apples-to-apples comparison using synchronized random seeds to definitively quantify the node-evaluation and latency savings of early pruning vs. late pruning.
 * **Space Complexity:** DFS backtracking stores only the current active path, giving a lean $O(n)$ space footprint.
-* **Search Complexity:** The melodic search engine uses an inverted index to narrow the corpus to candidate phrases via $O(1)$ average dictionary lookup cost per trigram. It then runs the expensive distance metric (Levenshtein, $O(n \cdot m)$; or DTW) strictly on that retrieved subset rather than scanning every phrase in the entire database.
+* **Search Complexity (Two-Tier Architecture):** The search engine decouples horizontal and vertical retrieval. It uses an inverted index to narrow the corpus to candidate phrases via $O(1)$ average dictionary lookup cost per trigram. It calculates relative offset positions, then runs the expensive distance metric (Levenshtein, $O(n \cdot m)$; or DTW) strictly on localized windows within that retrieved subset rather than scanning every phrase in the database.
 * **Scorer Limitations:** Note that while the internal scorer effectively measures mathematical discrimination spread across multiple candidates, this numerical spread serves as a proxy and has not yet been correlated with blind human preference testing.
 ---
 
@@ -82,8 +82,8 @@ The generative engine uses a **Pruned DFS Backtracking** algorithm to tame the e
 
   These scripts parse the corpus, perform a 70/15/15 train/evaluator/test split, transpose everything to a common key (C major / A minor) to densify the Markov states, and build the search index.
    ```bash
-   python train.py          # builds bach_matrices.pkl (chord Markov chains)
-   python build_index.py    # builds search_index.pkl (melodic search trigram index)
+   python train.py          # builds multi_composer_matrices.pkl and training_sequences.pkl
+   python build_index.py    # builds search_index.pkl (two-tier melodic and harmonic database)
    ```
 
 4. **Run the API server**

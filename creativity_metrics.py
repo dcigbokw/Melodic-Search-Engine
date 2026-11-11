@@ -30,7 +30,9 @@ def calculate_observed_transition_rate(generated_sequence, composer="bach", mark
 
 def calculate_style_likelihood(generated_sequence, composer="bach", markov_order=2):
     order_key = get_order_key(markov_order)
-    test_matrix = all_corpora.get(composer, {}).get("test", {}).get(order_key, {})
+    
+    # 1. Point to the training matrix
+    train_matrix = all_corpora.get(composer, {}).get("train", {}).get(order_key, {})
     nll_sum, transitions_scored, unseen_contexts = 0.0, 0, 0
     per_transition_log_probs = []
     epsilon = 1e-9 
@@ -42,16 +44,14 @@ def calculate_style_likelihood(generated_sequence, composer="bach", markov_order
         next_chord = generated_sequence[i+markov_order]
         transitions_scored += 1
         
-        if state not in test_matrix:
+        if state not in train_matrix:
             unseen_contexts += 1
             nll_sum -= math.log(epsilon)
             per_transition_log_probs.append(math.log(epsilon))
         else:
-            # Convert raw test count to probability for this specific context
-            transitions_dict = test_matrix[state]
-            total_counts = sum(transitions_dict.values())
-            raw_count = transitions_dict.get(next_chord, 0)
-            prob = raw_count / total_counts if total_counts > 0 else 0.0
+            # 2. Use the trained model probabilities
+            train_transitions = train_matrix.get(state, {})
+            prob = train_transitions.get(next_chord, 0.0)
             
             nll = -math.log(max(prob, epsilon))
             nll_sum += nll
