@@ -13,26 +13,39 @@ from music_scorer import score_composition
 from search_engine import advanced_search
 from fastapi.testclient import TestClient
 
-def brute_force_simulation(start_chord, num_chords, top_k, comp_weights, tonic_pc=0):
+def brute_force_simulation(start_chord, num_chords, markov_order, comp_weights, tonic_pc=0):
     """
-    Implements a fair, state-dependent brute force expansion across the Markov tree.
+    Apples-to-apples baseline. Generates using the exact same Markov orders and fallbacks as DFS,
+    but performs late-pruning (checking constraints only at the end) instead of early-pruning.
     """
     matrix_1st = interpolate_matrices(all_corpora, comp_weights, "first_order")
+    matrix_2nd = interpolate_matrices(all_corpora, comp_weights, "second_order")
+    fallback_options = [c for c in matrix_1st.keys() if isinstance(c, tuple) and c[0] != -1]
+    
     paths = [[start_chord]]
     nodes_explored = 1
     
     for depth in range(num_chords - 1):
         new_paths = []
         for path in paths:
-            opts_dict = matrix_1st.get(path[-1], {})
+            opts_dict = {}
+            if markov_order == 2 and len(path) >= 2:
+                opts_dict = matrix_2nd.get((path[-2], path[-1]), {})
+            if not opts_dict:
+                opts_dict = matrix_1st.get(path[-1], {})
+                
             valid_keys = [k for k in opts_dict.keys() if isinstance(k, tuple) and k[0] != -1]
-            opts = sorted(valid_keys, key=lambda k: opts_dict[k], reverse=True)[:top_k]
-            for cand in opts:
+            if not valid_keys and fallback_options:
+                valid_keys = random.sample(fallback_options, min(10, len(fallback_options)))
+                
+            # Expand all valid branches identically to DFS
+            for cand in valid_keys:
                 nodes_explored += 1
                 new_paths.append(path + [cand])
         paths = new_paths
         
     valid_songs = 0
+    # Late pruning evaluation
     for path in paths:
         if all(is_valid_transition(path[i], path[i+1], tonic_pc) for i in range(len(path)-1)):
             valid_songs += 1
@@ -121,24 +134,27 @@ def instrumented_dfs_engine(start_chord, num_chords, strictness, markov_order, c
     return successful_drafts, stats
 
 def calculate_sequence_nll(sequence, evaluator_composer, markov_order=2):
-    """Helper to calculate NLL against the held-out test split for a specific composer."""
+    """FIX: Converts raw test counts to probabilities for valid NLL calculation."""
     order_key = "first_order" if markov_order == 1 else "second_order"
     if markov_order == 3: order_key = "third_order"
     
     test_matrix = all_corpora.get(evaluator_composer, {}).get("test", {}).get(order_key, {})
     if not test_matrix: return float('inf')
     
-    nll_sum = 0.0
-    transitions = 0
+    nll_sum, transitions = 0.0, 0
     epsilon = 1e-9
     
     for i in range(len(sequence) - markov_order):
         state = sequence[i] if markov_order == 1 else tuple(sequence[i:i+markov_order])
         next_chord = sequence[i+markov_order]
-        
-        prob = test_matrix.get(state, {}).get(next_chord, 0.0)
-        nll_sum -= math.log(max(prob, epsilon))
         transitions += 1
+        
+        transitions_dict = test_matrix.get(state, {})
+        total_counts = sum(transitions_dict.values())
+        raw_count = transitions_dict.get(next_chord, 0)
+        prob = raw_count / total_counts if total_counts > 0 else 0.0
+        
+        nll_sum -= math.log(max(prob, epsilon))
         
     return (nll_sum / transitions) if transitions > 0 else float('inf')
 
@@ -174,7 +190,6 @@ def run_search_efficiency_suite():
     
     start_c_major = (72, 67, 60, 48)
     comp_weights = {'bach': 100, 'beethoven': 0, 'chopin': 0, 'mozart': 0, 'tchaikovsky': 0, 'handel': 0}
-    matrix_1st = interpolate_matrices(all_corpora, comp_weights, "first_order")
     num_trials = 20
     target_lengths = [4, 8, 16] 
     
@@ -202,9 +217,8 @@ def run_search_efficiency_suite():
         completion_rate = (successes / num_trials) * 100
         mean_rt = statistics.mean(runtimes)
         
-        # Invoke Brute Force equivalent for scale comparison (capped at top_k=3 to prevent memory overload on 16 chords)
         if target_length <= 8:
-            bf_nodes, bf_valid = brute_force_simulation(start_c_major, target_length, top_k=3, comp_weights=comp_weights)
+            bf_nodes, bf_valid = brute_force_simulation(start_c_major, target_length, markov_order=2, comp_weights=comp_weights)
             print(f"Brute Force Equivalent (top_k=3): {bf_nodes} nodes explored | {bf_valid} valid paths")
         
         print(f"DFS Completion Rate:   {completion_rate:.1f}%")
@@ -463,9 +477,9 @@ def run_search_evaluation_suite():
     print("======================================================\n")
     
     # Evaluate using ground truth labels to track Mean Reciprocal Rank (MRR)
-    test_queries = [
-        {"melody": [60, 62, 64, 65, 67], "label": "fake_chorale.mxl"}
-    ]
+    test_queries = [{'melody': [53, 57, 60, 65, 52, 55, 60, 67, 72, 52, 55, 60, 72, 53, 57, 60, 65, 69], 'label': 'bwv1.6.mxl'}, 
+                    {'melody': [55, 58, 67, 74, 57, 60, 65, 77, 58, 62, 65, 74, 57, 60, 66, 74], 'label': 'bwv10.7.mxl'}, 
+                    {'melody': [50, 62, 65, 69, 49, 57, 64, 69, 50, 57, 62, 65, 58, 62, 67], 'label': 'bwv101.7.mxl'}]
     
     algorithms = ["dtw", "levenshtein"]
     modes = ["exact", "relative"]
@@ -481,7 +495,7 @@ def run_search_evaluation_suite():
             for q in test_queries:
                 start_time = time.perf_counter()
                 matches = advanced_search(
-                    q["melody"], algorithm=algo, target_composer="all", max_dist=10, mode=mode, max_results=5
+                    q["melody"], algorithm=algo, target_composer="all", max_dist=20, mode=mode, max_results=5
                 )
                 duration = (time.perf_counter() - start_time) * 1000
                 latencies.append(duration)
@@ -523,9 +537,9 @@ def run_integration_evaluation_suite():
         "composer_weights": {'bach': 100}
     })
     
-    print(f"  Malformed Input Parsing Status: {res_err.status_code} (Fallback handled gracefully)")
-    if res_err.status_code == 200:
-        print(f"  Fallback Chords Returned: {len(res_err.json().get('chords', []))}")
+    print(f"  Malformed Input Parsing Status: {res_err.status_code}")
+    if res_err.status_code == 400:
+        print("  Fallback blocked successfully. API validated.")
 
 if __name__ == "__main__":
     run_search_efficiency_suite()

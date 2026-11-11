@@ -636,9 +636,9 @@ def harmonize_melody_endpoint(req: HarmonizeRequest):
             melody_midi.append(-1)
         else:
             try:
-                melody_midi.append(pitch.Pitch(n).midi)
-            except:
-                melody_midi.append(60)
+                melody_midi.append(parse_note(n))
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
 
     successful_drafts = []
     

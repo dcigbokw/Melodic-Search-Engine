@@ -298,6 +298,8 @@ def test_build_multidimensional_index(mock_get_composer, mock_parse, mock_file, 
     assert "database" in dumped_data
     assert "inverted_index" in dumped_data
     assert 0 in dumped_data["database"]
+    # Ensure the trigram index is actually populated
+    assert len(dumped_data["inverted_index"]) > 0
 # ==========================================
 # 8. BENCHMARK METRIC HELPERS 
 # ==========================================

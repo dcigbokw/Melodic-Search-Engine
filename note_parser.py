@@ -16,7 +16,7 @@ def parse_note(token: str) -> int:
     if re.fullmatch(r"-?\d+", token):
         return int(token)
 
-    match = re.search(r"([A-Ga-g])\s*([#♯sSbB♭fF]?)\s*(-?\d+)?", token)
+    match = re.fullmatch(r"([A-Ga-g])\s*([#♯sSbB♭fF]?)\s*(-?\d+)?", token)
     
     if not match:
         raise ValueError(

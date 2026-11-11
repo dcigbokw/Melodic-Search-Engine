@@ -35,15 +35,14 @@ It is deployed as a REST API and demonstrates scalable system design, algorithmi
 * **Musical Instructions (Expression Engine):** UI dropdowns for dynamics (velocity) and tempo (BPM) that physically alter the generated MIDI output.
 
 ### 5. Quantitative Evaluation Suite & Academic Polish
-* **Algorithmic Efficiency Benchmarking:** Automated simulations comparing the state-dependent DFS search engine against honest brute-force baselines to track nodes explored, max depth, pruning ratio, and latency.
+* **Algorithmic Efficiency Benchmarking:** Automated simulations comparing the state-dependent DFS search engine against apples-to-apples brute-force baselines to isolate and measure the latency savings of early constraint pruning.
 * **Quantitative Creativity Metrics:** Empirical validation of generated sequences measuring:
   * **Negative Log-Likelihood (NLL) & Perplexity** against a strict held-out test split using raw event-weighted transition counts.
   * **Phrase Memorization (LCS)** to measure contiguous training overlap and prevent strict plagiarism.
-  * **Nearest-Neighbor Novelty** using length-normalized Levenshtein distance against the training corpus.
-  * **Structural Diversity** across generated collections (measuring distinct states and bigram entropy).
-* **Search Retrieval Validation:** Mean Reciprocal Rank (MRR) tracking for melodic search queries against labeled ground truths.
-* **Rhythmic Meter Validation:** Strict mathematical boundary checks confirming multi-meter alignment (e.g., 4/4, 3/4, 6/8).
-
+  * **Nearest-Neighbor Novelty** using length-normalized sliding-window Levenshtein distance against the training corpus.
+  * **Structural Diversity** across generated collections (measuring pairwise Levenshtein distance and bigram entropy).
+* **Search Retrieval Validation:** Mean Reciprocal Rank (MRR) tracking for melodic search queries against known labeled ground truths.
+* **Rhythmic Meter Validation:** Strict mathematical boundary checks confirming 4/4 and 3/4 multi-meter alignment. (6/8 implementation is currently pending).
 ---
 
 ## 🧠 Algorithmic Optimization (Big-O)
@@ -52,8 +51,8 @@ The generative engine uses a **Pruned DFS Backtracking** algorithm to tame the e
 
 * **Time Complexity:** A naive brute-force approach testing all combinations of a chord sequence with branching factor $k$ yields $O(k^n)$. This engine applies early pruning, discarding invalid harmonic branches immediately instead of generating and checking every combination. The built-in benchmark suite runs an honest brute-force (via `itertools.product`) against the pruned engine on a small sequence length so the algorithmic savings can be directly measured.
 * **Space Complexity:** DFS backtracking stores only the current active path, giving a lean $O(n)$ space footprint.
-* **Search Complexity:** The melodic search engine uses an inverted index to narrow the corpus to candidate phrases in roughly $O(1)$ lookups per trigram, then runs the expensive distance metric (Levenshtein, $O(n \cdot m)$; or DTW) only on that narrowed candidate set rather than scanning every phrase in the entire database.
-
+* **Search Complexity:** The melodic search engine uses an inverted index to narrow the corpus to candidate phrases via $O(1)$ average dictionary lookup cost per trigram. It then runs the expensive distance metric (Levenshtein, $O(n \cdot m)$; or DTW) strictly on that retrieved subset rather than scanning every phrase in the entire database.
+* **Scorer Limitations:** Note that while the internal scorer effectively measures mathematical discrimination spread across multiple candidates, this numerical spread serves as a proxy and has not yet been correlated with blind human preference testing.
 ---
 
 ## 🛠️ Tech Stack

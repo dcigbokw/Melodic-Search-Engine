@@ -1,6 +1,7 @@
 import math
 import statistics
 import pickle
+import itertools
 from chord_generator import all_corpora
 from benchmark import instrumented_dfs_engine
 from collections import Counter
@@ -9,23 +10,18 @@ from search_engine import calculate_levenshtein
 def get_order_key(markov_order):
     if markov_order == 1: return "first_order"
     elif markov_order == 2: return "second_order"
-    elif markov_order == 3: return "third_order"
-    return "second_order"
+    return "third_order"
 
 def calculate_observed_transition_rate(generated_sequence, composer="bach", markov_order=3):
     order_key = get_order_key(markov_order)
     matrix = all_corpora.get(composer, {}).get("train", {}).get(order_key, {})
-    total_ngrams = 0
-    reused_ngrams = 0
-    
-    if len(generated_sequence) <= markov_order:
-        return 0.0, 0, 0
+    total_ngrams, reused_ngrams = 0, 0
+    if len(generated_sequence) <= markov_order: return 0.0, 0, 0
         
     for i in range(len(generated_sequence) - markov_order):
         total_ngrams += 1
         state = generated_sequence[i] if markov_order == 1 else tuple(generated_sequence[i:i+markov_order])
         next_chord = generated_sequence[i+markov_order]
-        
         if state in matrix and next_chord in matrix[state]:
             reused_ngrams += 1
             
@@ -35,14 +31,11 @@ def calculate_observed_transition_rate(generated_sequence, composer="bach", mark
 def calculate_style_likelihood(generated_sequence, composer="bach", markov_order=2):
     order_key = get_order_key(markov_order)
     test_matrix = all_corpora.get(composer, {}).get("test", {}).get(order_key, {})
-    nll_sum = 0.0
-    transitions_scored = 0
-    unseen_contexts = 0
+    nll_sum, transitions_scored, unseen_contexts = 0.0, 0, 0
     per_transition_log_probs = []
     epsilon = 1e-9 
     
-    if len(generated_sequence) <= markov_order:
-        return float('inf'), 0, 0, []
+    if len(generated_sequence) <= markov_order: return float('inf'), 0, 0, []
         
     for i in range(len(generated_sequence) - markov_order):
         state = generated_sequence[i] if markov_order == 1 else tuple(generated_sequence[i:i+markov_order])
@@ -54,12 +47,16 @@ def calculate_style_likelihood(generated_sequence, composer="bach", markov_order
             nll_sum -= math.log(epsilon)
             per_transition_log_probs.append(math.log(epsilon))
         else:
-            prob = test_matrix.get(state, {}).get(next_chord, 0.0)
+            # Convert raw test count to probability for this specific context
+            transitions_dict = test_matrix[state]
+            total_counts = sum(transitions_dict.values())
+            raw_count = transitions_dict.get(next_chord, 0)
+            prob = raw_count / total_counts if total_counts > 0 else 0.0
+            
             nll = -math.log(max(prob, epsilon))
             nll_sum += nll
             per_transition_log_probs.append(-nll)
-            if prob == 0.0:
-                unseen_contexts += 1
+            if prob == 0.0: unseen_contexts += 1
                 
     avg_nll = nll_sum / transitions_scored if transitions_scored > 0 else float('inf')
     return avg_nll, transitions_scored, unseen_contexts, per_transition_log_probs
@@ -70,15 +67,11 @@ def evaluate_blend_fidelity(generated_sequence, comp_a, weight_a, comp_b, weight
     matrix_b = all_corpora.get(comp_b, {}).get("evaluator", {}).get(order_key, {})
     
     total_weight = weight_a + weight_b
-    norm_w_a = weight_a / total_weight
-    norm_w_b = weight_b / total_weight
-    
-    nll_a_sum, nll_b_sum, nll_mix_sum = 0.0, 0.0, 0.0
-    transitions_scored = 0
+    norm_w_a, norm_w_b = weight_a / total_weight, weight_b / total_weight
+    nll_a_sum, nll_b_sum, nll_mix_sum, transitions_scored = 0.0, 0.0, 0.0, 0
     epsilon = 1e-9 
     
-    if len(generated_sequence) <= markov_order:
-        return float('inf'), float('inf'), float('inf')
+    if len(generated_sequence) <= markov_order: return float('inf'), float('inf'), float('inf')
         
     for i in range(len(generated_sequence) - markov_order):
         state = generated_sequence[i] if markov_order == 1 else tuple(generated_sequence[i:i+markov_order])
@@ -93,75 +86,71 @@ def evaluate_blend_fidelity(generated_sequence, comp_a, weight_a, comp_b, weight
         nll_b_sum -= math.log(max(prob_b, epsilon))
         nll_mix_sum -= math.log(max(prob_mix, epsilon))
         
-    if transitions_scored == 0:
-        return float('inf'), float('inf'), float('inf')
-        
+    if transitions_scored == 0: return float('inf'), float('inf'), float('inf')
     return (nll_a_sum / transitions_scored, nll_b_sum / transitions_scored, nll_mix_sum / transitions_scored)
 
 def calculate_phrase_memorization(generated_sequence, training_sequences):
-    if not generated_sequence or not training_sequences:
-        return 0, 0.0
-
-    max_overlap = 0
-    gen_len = len(generated_sequence)
+    if not generated_sequence or not training_sequences: return 0, 0.0
+    max_overlap, gen_len = 0, len(generated_sequence)
 
     for train_seq in training_sequences:
         train_len = len(train_seq)
         dp = [[0] * (train_len + 1) for _ in range(gen_len + 1)]
-        
         for i in range(1, gen_len + 1):
             for j in range(1, train_len + 1):
                 if generated_sequence[i - 1] == train_seq[j - 1]:
                     dp[i][j] = dp[i - 1][j - 1] + 1
-                    if dp[i][j] > max_overlap:
-                        max_overlap = dp[i][j]
-                else:
-                    dp[i][j] = 0
+                    if dp[i][j] > max_overlap: max_overlap = dp[i][j]
+                else: dp[i][j] = 0
 
-    overlap_percentage = (max_overlap / gen_len) * 100
-    return max_overlap, overlap_percentage
+    return max_overlap, (max_overlap / gen_len) * 100
 
 def calculate_nearest_neighbor_novelty(generated_sequence, training_sequences):
-    if not generated_sequence or not training_sequences:
-        return 1.0
-
+    """ Uses a sliding window across training sequences to prevent length biases."""
+    if not generated_sequence or not training_sequences: return 1.0
     min_distance = float('inf')
     gen_len = len(generated_sequence)
 
     for train_seq in training_sequences:
-        dist = calculate_levenshtein(generated_sequence, train_seq)
-        max_possible_dist = max(gen_len, len(train_seq))
-        normalized_dist = dist / max_possible_dist if max_possible_dist > 0 else 0
-        
-        if normalized_dist < min_distance:
-            min_distance = normalized_dist
+        train_len = len(train_seq)
+        if train_len < gen_len:
+            dist = calculate_levenshtein(generated_sequence, train_seq)
+            norm_dist = dist / max(gen_len, train_len)
+            min_distance = min(min_distance, norm_dist)
+        else:
+            # Sliding window for longer training sequences
+            for i in range(train_len - gen_len + 1):
+                window = train_seq[i:i+gen_len]
+                dist = calculate_levenshtein(generated_sequence, window)
+                min_distance = min(min_distance, dist / gen_len)
 
     return min_distance
 
 def calculate_structural_diversity(generated_sequence):
-    if len(generated_sequence) < 2:
-        return 0.0, 0.0
-
+    if len(generated_sequence) < 2: return 0.0, 0.0
     unique_chords = len(set(generated_sequence))
     distinct_ratio = unique_chords / len(generated_sequence)
 
-    transitions = []
-    for i in range(len(generated_sequence) - 1):
-        transitions.append((generated_sequence[i], generated_sequence[i+1]))
-        
+    transitions = [(generated_sequence[i], generated_sequence[i+1]) for i in range(len(generated_sequence) - 1)]
     transition_counts = Counter(transitions)
     total_transitions = len(transitions)
     
-    entropy = 0.0
-    for count in transition_counts.values():
-        p = count / total_transitions
-        entropy -= p * math.log2(p)
-
+    entropy = sum(- (count / total_transitions) * math.log2(count / total_transitions) for count in transition_counts.values())
     return distinct_ratio, entropy
+
+def calculate_pairwise_diversity(generated_collection):
+    """FIX: Calculates average Levenshtein distance between all pairs of generated compositions."""
+    if len(generated_collection) < 2: return 0.0
+    distances = []
+    for seq1, seq2 in itertools.combinations(generated_collection, 2):
+        dist = calculate_levenshtein(seq1, seq2)
+        distances.append(dist / max(len(seq1), len(seq2)))
+    return statistics.mean(distances)
+
 
 def run_creativity_evaluation():
     print("==========================================")
-    print("SUITE 3.2: QUANTITATIVE CREATIVITY SUITE   ")
+    print("SUITE 3.1: QUANTITATIVE CREATIVITY SUITE   ")
     print("==========================================\n")
     
     start_c_major = (72, 67, 60, 48)
@@ -221,27 +210,29 @@ def run_advanced_creativity_suite():
     generated_collection = []
     for i in range(5):
         drafts, _ = instrumented_dfs_engine(start_c_major, 16, strictness=1.0, markov_order=2, comp_weights=comp_weights, seed=800+i)
-        if drafts:
-            generated_collection.append(drafts[0])
+        if drafts: generated_collection.append(drafts[0])
             
     print(f"Evaluated across {len(generated_collection)} generated compositions.")
     
-    avg_overlap, avg_novelty = 0.0, 0.0
-    global_chords = set()
-    
+    avg_overlap, avg_novelty, avg_entropy = 0.0, 0.0, 0.0
     for seq in generated_collection:
         _, overlap_pct = calculate_phrase_memorization(seq, real_train_corpus)
         avg_overlap += overlap_pct
         avg_novelty += calculate_nearest_neighbor_novelty(seq, real_train_corpus)
-        global_chords.update(seq)
+        _, entropy = calculate_structural_diversity(seq)
+        avg_entropy += entropy
         
     if generated_collection:
         avg_overlap /= len(generated_collection)
         avg_novelty /= len(generated_collection)
+        avg_entropy /= len(generated_collection)
+        
+    pairwise_div = calculate_pairwise_diversity(generated_collection)
         
     print(f"  Avg Phrase Memorization: {avg_overlap:.1f}%")
     print(f"  Avg NN Novelty:          {avg_novelty:.3f}")
-    print(f"  Global Distinct Chords:  {len(global_chords)} unique states across collection")
+    print(f"  Avg Internal Entropy:    {avg_entropy:.3f} bits/transition")
+    print(f"  Pairwise Diversity:      {pairwise_div:.3f} (Avg normalized distance between outputs)")
 
 if __name__ == "__main__":
     run_creativity_evaluation()
