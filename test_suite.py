@@ -309,19 +309,15 @@ def test_build_multidimensional_index(mock_get_composer, mock_parse, mock_file, 
     mock_score = MagicMock()
     mock_score.metadata.title = "Test Song"
     
-    mock_chord_1 = MagicMock()
-    mock_chord_1.pitches = [MagicMock(midi=60), MagicMock(midi=64), MagicMock(midi=67)]
-    mock_chord_2 = MagicMock()
-    mock_chord_2.pitches = [MagicMock(midi=62), MagicMock(midi=65), MagicMock(midi=69)]
-    mock_chord_3 = MagicMock()
-    mock_chord_3.pitches = [MagicMock(midi=64), MagicMock(midi=67), MagicMock(midi=71)]
-    mock_chord_4 = MagicMock()
-    mock_chord_4.pitches = [MagicMock(midi=65), MagicMock(midi=69), MagicMock(midi=72)]
+    # Use real music21 Chord objects so getElementsByClass(chord.Chord) recognizes them
+    from music21 import chord as m21_chord
+    c1 = m21_chord.Chord(["C4", "E4", "G4"])
+    c2 = m21_chord.Chord(["D4", "F4", "A4"])
+    c3 = m21_chord.Chord(["E4", "G4", "B4"])
+    c4 = m21_chord.Chord(["F4", "A4", "C5"])
     
     mock_chordify = MagicMock()
-    mock_chordify.flatten().getElementsByClass.return_value = [
-        mock_chord_1, mock_chord_2, mock_chord_3, mock_chord_4
-    ]
+    mock_chordify.flatten().getElementsByClass.return_value = [c1, c2, c3, c4]
     mock_score.chordify.return_value = mock_chordify
     mock_parse.return_value = mock_score
     
@@ -333,7 +329,6 @@ def test_build_multidimensional_index(mock_get_composer, mock_parse, mock_file, 
     assert "inverted_index" in dumped_data
     assert 0 in dumped_data["database"]
     assert len(dumped_data["inverted_index"]) > 0
-
 # ==========================================
 # 8. BENCHMARK METRIC HELPERS 
 # ==========================================
@@ -456,6 +451,7 @@ def test_harmonize_endpoint(mock_interp):
 # ==========================================
 MOCK_DATABASE = {
     10: {
+        "type": "horizontal", # Added to satisfy the two-tier search engine check
         "title": "fake_chorale.mxl", 
         "composer": "bach", 
         "horizontal_intervals": [2, 2, 1, 0], 
