@@ -1,23 +1,22 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List
 import json
 import random
 import os
 import asyncio
 import uuid
-import math
-from chord_generator import compose_chorale_2nd_order, transition_matrix, all_corpora, is_valid_transition
-from search_engine import advanced_search, calculate_dtw, calculate_levenshtein
+from chord_generator import all_corpora, is_valid_transition
+from search_engine import advanced_search
 from note_parser import parse_note
 from rules_engine import audit_human_sequence
 from music_scorer import score_composition
+from dfs_solver import DFSSolver
 from rhythm_ai import (
     generate_rhythms, 
     inject_passing_tones, 
-    export_to_midi_with_rhythm,
     train_rhythm_model,
     transition_matrix_rhythm
 )
@@ -48,11 +47,8 @@ async def delayed_cleanup(filepath: str, delay: int = 15):
     except OSError:
         pass
 
-# ==========================================
-# 1. THE GENERATOR ENDPOINT
-# ==========================================
 class GenerateRequest(BaseModel):
-    num_chords: int = 16
+    num_chords: int = Field(16, le=100)
     composer: str = "bach"
     tonic_pc: int = 0
     tempo: str = "andante"
@@ -106,7 +102,6 @@ def get_dominant_composer(path, next_state, comp_weights, markov_order, split="t
         if prob == 0:
             prob = m1.get(path[-1], {}).get(next_state, 0)
             
-        # Weight by the user's requested slider value for context tracking
         weighted_prob = prob * w
         if weighted_prob > highest_prob:
             highest_prob = weighted_prob
@@ -130,74 +125,18 @@ def generate_melody(req: GenerateRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail=f"No trained chords found matching tonic_pc={req.tonic_pc}.")
 
     start_chord = random.choice(candidate_starts)
-    fallback_options = [c for c in matrix_1st.keys() if isinstance(c, tuple) and c[0] != -1]
-    successful_drafts = []
     
-    markov_order = 2
-    temperature = 1.0
-    range_expansion = 0
-    cadence_pref = "authentic"
-    RANGES = {0: (60, 81), 1: (53, 74), 2: (48, 69), 3: (40, 62)}
-    
-    def dfs_generate(path, visited):
-        if len(successful_drafts) >= 5: return
-        
-        current_depth = len(path) - 1
-        if current_depth == req.num_chords - 1:
-            successful_drafts.append(path.copy())
-            return
-            
-        opts_dict = {}
-        target_order = markov_order
-        
-        while target_order >= 1 and not opts_dict:
-            if target_order == 3 and len(path) >= 3:
-                opts_dict = matrix_3rd.get((path[-3], path[-2], path[-1]), {})
-            elif target_order == 2 and len(path) >= 2:
-                opts_dict = matrix_2nd.get((path[-2], path[-1]), {})
-            elif target_order == 1:
-                opts_dict = matrix_1st.get(path[-1], {})
-            target_order -= 1
-            
-        valid_keys = [k for k in opts_dict.keys() if isinstance(k, tuple) and k[0] != -1]
-        opts = sorted(valid_keys, key=lambda k: math.log(random.random() + 1e-9) / (opts_dict[k] ** (1.0 / max(0.1, temperature))), reverse=True)
-        
-        if len(opts) < 5 and fallback_options:
-            opts.extend(random.sample(fallback_options, min(20, len(fallback_options))))
-        
-        for cand in opts:
-            cand_state = cand[-1] if isinstance(cand, tuple) and isinstance(cand[0], tuple) else cand
-            curr_state = path[-1]
-            
-            out_of_range = False
-            if cand_state[0] != -1:
-                for v in range(4):
-                    min_pitch, max_pitch = RANGES[v]
-                    if not (min_pitch - range_expansion <= cand_state[v] <= max_pitch + range_expansion):
-                        out_of_range = True
-                        break
-            if out_of_range: continue
-
-            if cand_state[0] != -1 and cadence_pref != "none":
-                cand_index = len(path) 
-                is_penultimate = (cand_index == req.num_chords - 2)
-                is_ultimate = (cand_index == req.num_chords - 1)
-                bass_pc = cand_state[3] % 12
-                
-                if cadence_pref == "authentic":
-                    if is_penultimate and bass_pc != (req.tonic_pc + 7) % 12: continue
-                    if is_ultimate and bass_pc != req.tonic_pc: continue
-            
-            passes_rules = is_valid_transition(curr_state, cand_state, req.tonic_pc)
-            if passes_rules or random.random() > req.strictness:
-                h = hash(tuple(path + [cand_state]))
-                if h in visited: continue
-                visited.add(h)
-                path.append(cand_state)
-                dfs_generate(path, visited)
-                path.pop()
-
-    dfs_generate([start_chord], set())
+    solver = DFSSolver(matrix_1st, matrix_2nd, matrix_3rd, is_valid_transition, tonic_pc=req.tonic_pc)
+    successful_drafts, _ = solver.solve(
+        start_sequence=[start_chord],
+        num_to_add=req.num_chords - 1,
+        strictness=req.strictness,
+        markov_order=2,
+        temperature=1.0,
+        max_drafts=5,
+        range_expansion=0,
+        cadence_pref="authentic"
+    )
     
     if successful_drafts:
         best_draft = None
@@ -281,9 +220,6 @@ def satb_to_midi_tuple(satb_list):
                 raise ValueError(f"Invalid note format: '{note_str}'. Please use scientific pitch notation (e.g., 'C4', 'F#3').") 
     return tuple(midi_vals)
 
-# ==========================================
-# 2. THE MARKOV STATE MACHINE VISUALIZER ENDPOINT
-# ==========================================
 class MarkovTreeRequest(BaseModel):
     current_chords: List[List[str]]
     composer_weights: dict
@@ -322,7 +258,6 @@ def get_markov_tree(req: MarkovTreeRequest):
     if len(path) == 0:
         return {"nodes": [], "edges": []}
         
-    # 1. BUILD THE HISTORICAL PATH
     for i, state in enumerate(path):
         satb = midi_tuple_to_satb(state)
         node_id = f"hist_{i}"
@@ -346,7 +281,6 @@ def get_markov_tree(req: MarkovTreeRequest):
                 "color": {"color": "#cbd5e1"}
             })
             
-    # 2. BRANCH INTO THE FUTURE
     current_node_id = f"hist_{len(path)-1}"
     color_map = {
         "bach": "#dbeafe", "beethoven": "#fee2e2", "chopin": "#dcfce7", 
@@ -377,13 +311,11 @@ def get_markov_tree(req: MarkovTreeRequest):
         })
         
     return {"nodes": nodes, "edges": edges}
-# ==========================================
-# 3. THE CO-CREATIVE EXTEND ENDPOINT
-# ==========================================
+
 class ExtendRequest(BaseModel):
     current_chords: List[List[str]]   
     current_durations: List[float] = [] 
-    num_to_add: int = 4
+    num_to_add: int = Field(4, le=100)
     composer_weights: dict = {"bach": 100, "beethoven": 0, "chopin": 0, "mozart": 0, "tchaikovsky": 0, "handel":0}
     rhythm_weights: dict = {"bach": 100, "beethoven": 0, "chopin": 0, "mozart": 0, "tchaikovsky": 0, "handel":0}
     tempo: str = "andante"
@@ -437,103 +369,25 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
             
         raise HTTPException(status_code=400, detail={"error": error_msg, "solution": solution})
     
-    current_state = human_sequence[-1]
-    fallback_options = [c for c in matrix_1st.keys() if isinstance(c, tuple) and c[0] != -1]
-    successful_drafts = [] 
+    solver = DFSSolver(matrix_1st, matrix_2nd, matrix_3rd, is_valid_transition, tonic_pc=req.tonic_pc)
+    successful_drafts, raw_stats = solver.solve(
+        start_sequence=human_sequence,
+        num_to_add=req.num_to_add,
+        strictness=req.strictness,
+        markov_order=req.markov_order,
+        temperature=req.temperature,
+        max_drafts=5,
+        range_expansion=req.range_expansion,
+        cadence_pref=req.cadence_pref
+    )
     
     xai_stats = {
-        "total_evaluated": 0,
-        "out_of_range": 0,
-        "cadence_violations": 0,
-        "voice_leading_rejections": 0,
-        "accepted_branches": 0
+        "total_evaluated": raw_stats.get("candidate_evaluations", 0),
+        "out_of_range": raw_stats.get("out_of_range", 0),
+        "cadence_violations": raw_stats.get("cadence_violations", 0),
+        "voice_leading_rejections": raw_stats.get("rule_rejections", 0),
+        "accepted_branches": raw_stats.get("nodes_entered", 0)
     }
-    
-    RANGES = {0: (60, 81), 1: (53, 74), 2: (48, 69), 3: (40, 62)}
-    
-    def dfs_extend(path, visited):
-        if len(successful_drafts) >= 5: return
-            
-        current_depth = len(path) - len(human_sequence) 
-        
-        if current_depth == req.num_to_add:
-            successful_drafts.append(path.copy())
-            return
-        
-        opts_dict = {}
-        target_order = req.markov_order
-        
-        while target_order >= 1 and not opts_dict:
-            if target_order == 3 and len(path) >= 3:
-                state = (path[-3], path[-2], path[-1])
-                opts_dict = matrix_3rd.get(state, {})
-            elif target_order == 2 and len(path) >= 2:
-                state = (path[-2], path[-1])
-                opts_dict = matrix_2nd.get(state, {})
-            elif target_order == 1:
-                state = path[-1]
-                opts_dict = matrix_1st.get(state, {})
-                
-            target_order -= 1
-            
-        valid_keys = [k for k in opts_dict.keys() if isinstance(k, tuple) and k[0] != -1]
-        
-        temp = max(0.1, req.temperature)
-        opts = sorted(valid_keys, key=lambda k: math.log(random.random() + 1e-9) / (opts_dict[k] ** (1.0 / temp)), reverse=True)
-            
-        if len(opts) < 5 and fallback_options:
-            opts.extend(random.sample(fallback_options, min(20, len(fallback_options))))
-        
-        for cand in opts:
-            xai_stats["total_evaluated"] += 1 
-            
-            cand_state = cand[-1] if isinstance(cand, tuple) and isinstance(cand[0], tuple) else cand
-            curr_state = path[-1]
-            
-            out_of_range = False
-            if cand_state[0] != -1:
-                for v in range(4):
-                    min_pitch, max_pitch = RANGES[v]
-                    if not (min_pitch - req.range_expansion <= cand_state[v] <= max_pitch + req.range_expansion):
-                        out_of_range = True
-                        break
-            if out_of_range: 
-                xai_stats["out_of_range"] += 1
-                continue
-
-            cadence_failed = False
-            if cand_state[0] != -1 and req.cadence_pref != "none":
-                cand_index_in_ext = len(path) - len(human_sequence)
-                is_penultimate = (cand_index_in_ext == req.num_to_add - 2)
-                is_ultimate = (cand_index_in_ext == req.num_to_add - 1)
-                bass_pc = cand_state[3] % 12
-                
-                if req.cadence_pref == "authentic":
-                    if is_penultimate and bass_pc != (req.tonic_pc + 7) % 12: cadence_failed = True 
-                    if is_ultimate and bass_pc != req.tonic_pc: cadence_failed = True 
-                elif req.cadence_pref == "half":
-                    if is_ultimate and bass_pc != (req.tonic_pc + 7) % 12: cadence_failed = True 
-                elif req.cadence_pref == "plagal":
-                    if is_penultimate and bass_pc != (req.tonic_pc + 5) % 12: cadence_failed = True 
-                    if is_ultimate and bass_pc != req.tonic_pc: cadence_failed = True 
-
-            if cadence_failed:
-                xai_stats["cadence_violations"] += 1
-                continue
-
-            passes_rules = is_valid_transition(curr_state, cand_state, req.tonic_pc)
-            if passes_rules or random.random() > req.strictness:
-                h = hash(tuple(path + [cand_state]))
-                if h in visited: continue
-                visited.add(h)
-                xai_stats["accepted_branches"] += 1
-                path.append(cand_state)
-                dfs_extend(path, visited)
-                path.pop()
-            else:
-                xai_stats["voice_leading_rejections"] += 1
-
-    dfs_extend(human_sequence.copy(), set())
     
     if successful_drafts:
         best_draft = None
@@ -555,7 +409,6 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
     ai_rhythms = generate_rhythms(num_chords=len(ai_extension), rhythm_weights=req.rhythm_weights)
     full_rhythms = human_rhythms + ai_rhythms
     
-    # Context-Aware Visualization: Calculate which composer produced each AI state
     composer_sources = []
     path_trace = human_sequence.copy()
     for state in ai_extension:
@@ -617,9 +470,6 @@ def extend_composition(req: ExtendRequest, background_tasks: BackgroundTasks):
         midi_data = f.read()
     return Response(content=midi_data, media_type="audio/midi", headers=headers)
 
-# ==========================================
-# CORPUS-RETRIEVAL HARMONIZE ENDPOINT
-# ==========================================
 class HarmonizeRequest(BaseModel):
     melody: List[str]
     tonic_pc: int = 0
@@ -671,9 +521,6 @@ def harmonize_melody_endpoint(req: HarmonizeRequest):
     else:
         raise HTTPException(status_code=400, detail="Could not find a rule-compliant harmonization for this melody in the current corpus.")
 
-# ==========================================
-# 4. THE SEARCH ENDPOINT
-# ==========================================
 class SearchRequest(BaseModel):
     melody: List[str]
     algorithm: str = "dtw"
@@ -743,7 +590,7 @@ def search_corpus(req: SearchRequest, background_tasks: BackgroundTasks):
         mf.write()
         mf.close()
         
-        background_tasks.add_task(delayed_cleanup, temp_filename, 15)
+        background_tasks.add_task(delayed_cleanup, temp_filename, 600)
         
         rag_satb = []
         if is_chord:

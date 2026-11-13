@@ -4,7 +4,6 @@ import os
 from collections import defaultdict
 
 INDEX_FILE = "search_index.pkl"
-WINDOW_SIZE = 4 
 
 def build_multidimensional_index():
     print("Building the Multi-Tier Search Index...")
@@ -24,7 +23,8 @@ def build_multidimensional_index():
                 score_chords = [c for c in chordified.flatten().getElementsByClass(chord.Chord) if len(c.pitches) >= 2]
                 if not score_chords: continue
                 
-                title = score.metadata.title or os.path.basename(str(score_path))
+                source_id = os.path.basename(str(score_path))
+                title = score.metadata.title or source_id
                 
                 # --- TIER 1: HORIZONTAL (Full Continuous Melody) ---
                 melody_line = [max(c.pitches).midi for c in score_chords]
@@ -32,34 +32,33 @@ def build_multidimensional_index():
                 
                 database[phrase_id] = {
                     "type": "horizontal",
+                    "source_id": source_id,
                     "title": title,
                     "composer": comp,
                     "raw_notes": melody_line,
                     "horizontal_intervals": horizontal_intervals
                 }
                 
-                # Trigram offset posting for O(1) local window lookup
                 for i in range(len(horizontal_intervals) - 2):
                     trigram = tuple(horizontal_intervals[i : i + 3])
                     inverted_index[trigram].append((phrase_id, i))
                     
                 phrase_id += 1
                 
-                # --- TIER 2: VERTICAL (4-Chord Blocks) ---
+                # --- TIER 2: VERTICAL (Individual Chords) ---
                 midi_sequence = [[p.midi for p in c.pitches] for c in score_chords]
-                for i in range(len(midi_sequence) - WINDOW_SIZE + 1):
-                    window = midi_sequence[i : i + WINDOW_SIZE]
-                    raw_notes = [note for chord_block in window for note in chord_block]
-                    first_chord = sorted(window[0])
-                    bass = first_chord[0]
-                    vertical_intervals = tuple([n - bass for n in first_chord])
-                    exact_vertical_notes = tuple(first_chord)
+                for c_block in midi_sequence:
+                    sorted_c = sorted(c_block)
+                    bass = sorted_c[0]
+                    vertical_intervals = tuple([n - bass for n in sorted_c])
+                    exact_vertical_notes = tuple(sorted_c)
                     
                     database[phrase_id] = {
                         "type": "vertical",
+                        "source_id": source_id,
                         "title": title,
                         "composer": comp,
-                        "raw_notes": raw_notes,
+                        "raw_notes": list(sorted_c),
                         "vertical_intervals": list(vertical_intervals),
                         "exact_vertical_notes": list(exact_vertical_notes) 
                     }

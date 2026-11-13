@@ -61,33 +61,54 @@ def calculate_style_likelihood(generated_sequence, composer="bach", markov_order
     avg_nll = nll_sum / transitions_scored if transitions_scored > 0 else float('inf')
     return avg_nll, transitions_scored, unseen_contexts, per_transition_log_probs
 
-def evaluate_blend_fidelity(generated_sequence, comp_a, weight_a, comp_b, weight_b, markov_order=2):
-    order_key = get_order_key(markov_order)
-    matrix_a = all_corpora.get(comp_a, {}).get("evaluator", {}).get(order_key, {})
-    matrix_b = all_corpora.get(comp_b, {}).get("evaluator", {}).get(order_key, {})
+def evaluate_blend_fidelity(sequence, comp_A, weight_A, comp_B, weight_B, markov_order=2):
+    """
+    Evaluates how well a sequence fits a blended model.
+    Mirrors the exact row-level normalization used in the generator's interpolate_matrices().
+    """
+    order_key = "first_order" if markov_order == 1 else "second_order"
+    if markov_order == 3: order_key = "third_order"
     
-    total_weight = weight_a + weight_b
-    norm_w_a, norm_w_b = weight_a / total_weight, weight_b / total_weight
-    nll_a_sum, nll_b_sum, nll_mix_sum, transitions_scored = 0.0, 0.0, 0.0, 0
-    epsilon = 1e-9 
+    # Point to the "train" split to match the generator's source data
+    matrix_A = all_corpora.get(comp_A, {}).get("train", {}).get(order_key, {})
+    matrix_B = all_corpora.get(comp_B, {}).get("train", {}).get(order_key, {})
     
-    if len(generated_sequence) <= markov_order: return float('inf'), float('inf'), float('inf')
+    norm_A = weight_A / (weight_A + weight_B)
+    norm_B = weight_B / (weight_A + weight_B)
+    
+    nll_A, nll_B, nll_mix = 0.0, 0.0, 0.0
+    transitions = 0
+    epsilon = 1e-9
+    
+    for i in range(len(sequence) - markov_order):
+        state = sequence[i] if markov_order == 1 else tuple(sequence[i:i+markov_order])
+        next_chord = sequence[i+markov_order]
+        transitions += 1
         
-    for i in range(len(generated_sequence) - markov_order):
-        state = generated_sequence[i] if markov_order == 1 else tuple(generated_sequence[i:i+markov_order])
-        next_chord = generated_sequence[i+markov_order]
-        transitions_scored += 1
+        trans_A = matrix_A.get(state, {})
+        trans_B = matrix_B.get(state, {})
         
-        prob_a = matrix_a.get(state, {}).get(next_chord, 0.0)
-        prob_b = matrix_b.get(state, {}).get(next_chord, 0.0)
-        prob_mix = (prob_a * norm_w_a) + (prob_b * norm_w_b)
+        blended_row = {}
+        all_next_states = set(trans_A.keys()) | set(trans_B.keys())
         
-        nll_a_sum -= math.log(max(prob_a, epsilon))
-        nll_b_sum -= math.log(max(prob_b, epsilon))
-        nll_mix_sum -= math.log(max(prob_mix, epsilon))
+        for k in all_next_states:
+            p_A = trans_A.get(k, 0.0)
+            p_B = trans_B.get(k, 0.0)
+            blended_row[k] = (norm_A * p_A) + (norm_B * p_B)
+            
+        row_sum = sum(blended_row.values())
         
-    if transitions_scored == 0: return float('inf'), float('inf'), float('inf')
-    return (nll_a_sum / transitions_scored, nll_b_sum / transitions_scored, nll_mix_sum / transitions_scored)
+        prob_A = trans_A.get(next_chord, 0.0)
+        prob_B = trans_B.get(next_chord, 0.0)
+        prob_mix = blended_row.get(next_chord, 0.0) / row_sum if row_sum > 0 else 0.0
+        
+        nll_A -= math.log(max(prob_A, epsilon))
+        nll_B -= math.log(max(prob_B, epsilon))
+        nll_mix -= math.log(max(prob_mix, epsilon))
+        
+    if transitions > 0:
+        return nll_A / transitions, nll_B / transitions, nll_mix / transitions
+    return float('inf'), float('inf'), float('inf')
 
 def calculate_phrase_memorization(generated_sequence, training_sequences):
     if not generated_sequence or not training_sequences: return 0, 0.0
@@ -164,29 +185,29 @@ def run_creativity_evaluation():
         seq = drafts_strict[0]
         reuse_rate, reuse_num, reuse_den = calculate_observed_transition_rate(seq, "bach", markov_order=3)
         nll_bach, scored_bach, unseen_bach, _ = calculate_style_likelihood(seq, "bach", markov_order=2)
-        nll_chopin, scored_chopin, unseen_chopin, _ = calculate_style_likelihood(seq, "chopin", markov_order=2)
+        nll_beethoven, scored_beethoven, unseen_beethoven, _ = calculate_style_likelihood(seq, "beethoven", markov_order=2)
         
         print(f"   -> Sequence Length: {len(seq)} chords")
         print(f"   -> Local Transition Reuse (3rd Order): {reuse_rate:.1f}% ({reuse_num}/{reuse_den})")
         print(f"   -> NLL (Bach model):   {nll_bach:.3f} (Scored {scored_bach}, Unseen {unseen_bach})")
-        print(f"   -> NLL (Chopin model): {nll_chopin:.3f}")
+        print(f"   -> NLL (Beethoven model): {nll_beethoven:.3f}")
     else:
         print("   -> Failed to generate a sequence.")
 
-    print("\nScenario 2: Generating Style Blend (50% Bach, 50% Chopin, 0.8 Strictness)...")
-    comp_weights_blend = {'bach': 50, 'beethoven': 0, 'chopin': 50, 'mozart': 0, 'tchaikovsky': 0, 'handel': 0}
+    print("\nScenario 2: Generating Style Blend (50% Bach, 50% Beethoven, 0.8 Strictness)...")
+    comp_weights_blend = {'bach': 50, 'beethoven': 50, 'chopin': 0, 'mozart': 0, 'tchaikovsky': 0, 'handel': 0}
     drafts_blend, _ = instrumented_dfs_engine(start_c_major, num_chords, strictness=0.8, markov_order=2, comp_weights=comp_weights_blend, seed=42)
     
     if drafts_blend:
         seq_blend = drafts_blend[0]
         reuse_bach, _, _ = calculate_observed_transition_rate(seq_blend, "bach", markov_order=3)
-        reuse_chopin, _, _ = calculate_observed_transition_rate(seq_blend, "chopin", markov_order=3)
-        nll_a, nll_b, nll_mix = evaluate_blend_fidelity(seq_blend, "bach", 50, "chopin", 50, markov_order=2)
+        reuse_beethoven, _, _ = calculate_observed_transition_rate(seq_blend, "beethoven", markov_order=3)
+        nll_a, nll_b, nll_mix = evaluate_blend_fidelity(seq_blend, "bach", 50, "beethoven", 50, markov_order=2)
         
         print(f"   -> Local Transition Reuse (Bach):   {reuse_bach:.1f}%")
-        print(f"   -> Local Transition Reuse (Chopin): {reuse_chopin:.1f}%")
+        print(f"   -> Local Transition Reuse (Beethoven): {reuse_beethoven:.1f}%")
         print(f"   -> NLL (Bach model):   {nll_a:.3f}")
-        print(f"   -> NLL (Chopin model): {nll_b:.3f}")
+        print(f"   -> NLL (Beethoven model): {nll_b:.3f}")
         print(f"   -> NLL (Target Mix):   {nll_mix:.3f}")
     else:
         print("   -> Failed to generate a sequence.")
